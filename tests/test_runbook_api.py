@@ -78,6 +78,18 @@ def test_script_runtime_and_workflow_validations():
     )
     assert workflow_missing_ref.status_code == 422
 
+    workflow_list_document = client.post(
+        "/api/workpieces/demo/runbooks/wf-list",
+        json={"type": "Workflow", "content": "[]\n"},
+    )
+    assert workflow_list_document.status_code == 422
+
+    workflow_scalar_document = client.post(
+        "/api/workpieces/demo/runbooks/wf-scalar",
+        json={"type": "Workflow", "content": "hello\n"},
+    )
+    assert workflow_scalar_document.status_code == 422
+
     client.post(
         "/api/workpieces/demo/runbooks/s1",
         json={"type": "Script", "content": "echo {{a}}", "runtime": "python"},

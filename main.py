@@ -452,11 +452,18 @@ def _normalize_manifest(vars_from_template: set[str], manifest: list[ManifestVar
 
 def _workflow_includes(content: str) -> list[str]:
     try:
-        parsed = yaml.safe_load(content) or {}
+        parsed = yaml.safe_load(content)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=f"invalid workflow yaml: {exc}") from exc
+    if parsed is None:
+        parsed = {}
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=422, detail="workflow yaml must be a mapping")
+    steps = parsed.get("steps", []) or []
+    if not isinstance(steps, list):
+        raise HTTPException(status_code=422, detail="workflow steps must be a list")
     includes: list[str] = []
-    for step in parsed.get("steps", []) or []:
+    for step in steps:
         if isinstance(step, dict) and isinstance(step.get("include"), str):
             includes.append(step["include"])
     return includes
@@ -668,7 +675,7 @@ def _create_task_from_runbook(
         task_id=_next_task_id(),
         source=source,
         runbook_name=runbook_name,
-        variables={key: variables[key] for key in valid_keys},
+        variables=dict(variables),
         status=TaskStatus.PENDING if (missing or unknown) else TaskStatus.READY,
         error_summary="",
         schedule={},
@@ -868,6 +875,7 @@ async def update_workpiece(workpiece_name: str, body: WorkpieceUpdateRequest) ->
 
 @app.delete("/api/workpieces/{workpiece_name}", status_code=204)
 async def delete_workpiece(workpiece_name: str) -> Response:
+    workpiece_name = _validate_workpiece_name_component(workpiece_name)
     root = _workpiece_dir(workpiece_name)
     if not root.exists():
         raise HTTPException(status_code=404, detail="workpiece not found")

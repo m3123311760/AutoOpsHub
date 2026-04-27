@@ -76,3 +76,25 @@ def test_job_trigger_creates_job_task():
     task = trigger.json()["task"]
     assert task["source"] == "job"
     assert task["runbook_name"] == "job-rb"
+
+
+def test_job_trigger_with_unknown_variables_stays_pending():
+    create = client.post(
+        "/api/workpieces/job-wp/jobs/bad-vars",
+        json={
+            "cron": "* * * * *",
+            "runbook_name": "job-rb",
+            "variables": {"name": "from-job", "oops": "bad"},
+        },
+    )
+    assert create.status_code == 201
+
+    trigger = client.post("/api/workpieces/job-wp/jobs/bad-vars/trigger")
+
+    assert trigger.status_code == 201
+    body = trigger.json()
+    assert body["unknown_variables"] == ["oops"]
+    assert body["task"]["status"] == "pending"
+    assert body["task"]["error_summary"] == "unknown variables: oops"
+    assert body["task"]["variables"]["oops"] == "bad"
+    assert "auto_strategy" not in body["task"]["schedule"]

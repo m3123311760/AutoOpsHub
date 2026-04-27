@@ -93,3 +93,15 @@ def test_workpiece_rename_rejects_path_components():
     assert not (TEST_HOME / ".autoopshub" / "other").exists()
 
     client.delete("/api/workpieces/rename-safe")
+
+
+def test_workpiece_delete_rejects_parent_path_traversal():
+    workspace_root = TEST_HOME / ".autoopshub"
+    workspace_root.mkdir(parents=True, exist_ok=True)
+    sentinel = workspace_root / "delete-sentinel.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+
+    bad = client.delete("/api/workpieces/%2E%2E")
+
+    assert bad.status_code == 422
+    assert sentinel.exists()
