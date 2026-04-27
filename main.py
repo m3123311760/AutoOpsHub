@@ -258,6 +258,27 @@ def _validate_task_variables_against_readonly(manifest: list[ManifestVariable], 
             raise HTTPException(status_code=422, detail=f"禁止覆盖只读系统变量: {key}")
 
 
+def _validate_workpiece_name_component(name: str) -> str:
+    stripped = name.strip()
+    if not stripped:
+        raise HTTPException(status_code=422, detail="workpiece name cannot be empty")
+    if stripped in {".", ".."} or "/" in stripped or "\\" in stripped:
+        raise HTTPException(status_code=422, detail="workpiece name must be a single path component")
+    return stripped
+
+
+def _jinja_render_context(variables: dict[str, Any]) -> dict[str, Any]:
+    context = dict(variables)
+    system_vars = {
+        key.split(".", 1)[1]: value
+        for key, value in variables.items()
+        if key.startswith("system.") and "." in key
+    }
+    if system_vars:
+        context["system"] = system_vars
+    return context
+
+
 def _combined_template_var_names(content: str) -> set[str]:
     return extract_user_template_vars(content) | extract_system_refs_from_template(content)
 
@@ -535,7 +556,7 @@ def _execute_task(workpiece_name: str, task: TaskRecord) -> TaskRecord:
         merged_vars["system.env_file"] = str(runtime_dir / "autoopshub.env")
         if not str(merged_vars.get("system.inventory_file", "")).strip():
             merged_vars["system.inventory_file"] = str(runtime_dir / "inventory.ini")
-        rendered = Template(runbook.content).render(**merged_vars)
+        rendered = Template(runbook.content).render(**_jinja_render_context(merged_vars))
         rendered_path.write_text(rendered, encoding="utf-8")
         task.schedule["runtime_dir"] = str(runtime_dir)
         task.schedule["rendered_file"] = str(rendered_path)
@@ -803,6 +824,7 @@ async def list_workpieces() -> dict[str, list[dict[str, Any]]]:
 
 @app.post("/api/workpieces/{workpiece_name}", status_code=201)
 async def create_workpiece(workpiece_name: str, body: WorkpieceCreateRequest) -> dict[str, Any]:
+    workpiece_name = _validate_workpiece_name_component(workpiece_name)
     root = _workpiece_dir(workpiece_name)
     if root.exists():
         raise HTTPException(status_code=409, detail="workpiece already exists")
@@ -828,7 +850,7 @@ async def get_workpiece(workpiece_name: str) -> dict[str, Any]:
 @app.put("/api/workpieces/{workpiece_name}")
 async def update_workpiece(workpiece_name: str, body: WorkpieceUpdateRequest) -> dict[str, Any]:
     current = _load_meta(workpiece_name)
-    new_name = body.name or current.name
+    new_name = _validate_workpiece_name_component(body.name) if body.name is not None else current.name
     new_desc = current.description if body.description is None else body.description
     if new_name != workpiece_name and _workpiece_dir(new_name).exists():
         raise HTTPException(status_code=409, detail="target workpiece name already exists")

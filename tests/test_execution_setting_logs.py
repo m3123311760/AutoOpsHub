@@ -45,6 +45,29 @@ def test_setting_auto_execute_and_render_to_tmp():
     assert ".autoopshub" not in task["schedule"]["runtime_dir"]
 
 
+def test_system_reserved_variables_render_as_nested_jinja_context():
+    client.delete("/api/workpieces/exec-system-wp")
+    create_wp = client.post("/api/workpieces/exec-system-wp", json={"description": "system vars"})
+    assert create_wp.status_code == 201
+    create_rb = client.post(
+        "/api/workpieces/exec-system-wp/runbooks/rb-system",
+        json={
+            "type": "Workflow",
+            "content": 'output: "{{ system.output }}"\nrunbook: "{{ system.runbook_file }}"\nsteps: []\n',
+        },
+    )
+    assert create_rb.status_code == 201
+
+    trig = client.post("/api/workpieces/exec-system-wp/runbooks/rb-system/trigger", json={"variables": {}})
+    assert trig.status_code == 201
+    task = trig.json()["task"]
+    rendered_file = Path(task["schedule"]["rendered_file"])
+    rendered = rendered_file.read_text(encoding="utf-8")
+
+    assert f"output: \"{Path(task['schedule']['runtime_dir']) / 'system.output'}\"" in rendered
+    assert f"runbook: \"{rendered_file}\"" in rendered
+
+
 def test_logs_history_and_stream():
     trig = client.post("/api/workpieces/exec-wp/runbooks/rb/trigger", json={"variables": {}})
     task_id = trig.json()["task"]["task_id"]

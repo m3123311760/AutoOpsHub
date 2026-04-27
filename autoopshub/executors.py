@@ -83,6 +83,10 @@ def _parse_script_command_from_first_line(rendered_text: str) -> str | None:
     return first if first else None
 
 
+def _has_shebang(rendered_text: str) -> bool:
+    return rendered_text.lstrip().startswith("#!")
+
+
 def build_script_argv(
     settings: AppSettings,
     rendered_path: Path,
@@ -91,17 +95,14 @@ def build_script_argv(
 ) -> list[str]:
     """Script：优先 runbook.runtime；否则 shebang；否则首行命令；否则默认 shell。"""
 
-    stripped = rendered_text.lstrip()
-    if stripped.startswith("#!"):
-        if os.name == "nt":
-            return ["cmd", "/c", str(rendered_path)]
-        shell = settings.runtime_commands.default_script_shell
-        return [shell, str(rendered_path)]
-
     if runbook_runtime and runbook_runtime.strip():
         parts = shlex.split(runbook_runtime, posix=os.name != "nt")
         if parts:
             return parts + [str(rendered_path)]
+    if _has_shebang(rendered_text):
+        if os.name == "nt":
+            return ["cmd", "/c", str(rendered_path)]
+        return [str(rendered_path)]
     cmd_line = _parse_script_command_from_first_line(rendered_text)
     if cmd_line:
         try:
@@ -167,6 +168,8 @@ def run_script(
     log: LogFn,
 ) -> ExecResult:
     argv = build_script_argv(settings, rendered_path, rendered_text, runbook_runtime)
+    if os.name != "nt" and _has_shebang(rendered_text) and not (runbook_runtime and runbook_runtime.strip()):
+        rendered_path.chmod(rendered_path.stat().st_mode | 0o700)
     chk = check_tokens_available(argv)
     if not chk.ok:
         log("error", chk.message)

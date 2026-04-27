@@ -32,6 +32,9 @@ class AuthService:
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
 
+    def _api_key_prefix_len(self) -> int:
+        return max(4, int(self._settings.api_key.prefix_length))
+
     def _require_jwt_secret(self) -> str:
         secret = self._settings.jwt.secret.strip()
         if not secret:
@@ -191,7 +194,7 @@ class AuthService:
 
     def create_api_key(self, name: str) -> dict[str, Any]:
         raw = f"aoh_{secrets.token_urlsafe(32)}"
-        prefix_len = max(4, int(self._settings.api_key.prefix_length))
+        prefix_len = self._api_key_prefix_len()
         prefix = raw[:prefix_len]
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         key_hash = pwd_context.hash(digest)
@@ -237,7 +240,7 @@ class AuthService:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT id, key_hash, revoked_at FROM auth_api_keys WHERE key_prefix=%s LIMIT 5",
-                    (raw_key[: self._settings.api_key.prefix_length],),
+                    (raw_key[: self._api_key_prefix_len()],),
                 )
                 rows = cur.fetchall()
         finally:

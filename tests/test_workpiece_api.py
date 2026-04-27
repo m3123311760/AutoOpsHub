@@ -79,3 +79,17 @@ def test_workpiece_crud_and_setting_flow():
 
     after_delete_resp = client.get("/api/workpieces/platform")
     assert after_delete_resp.status_code == 404
+
+
+def test_workpiece_rename_rejects_path_components():
+    client.delete("/api/workpieces/rename-safe")
+    create_resp = client.post("/api/workpieces/rename-safe", json={"description": "safe"})
+    assert create_resp.status_code == 201
+
+    bad = client.put("/api/workpieces/rename-safe", json={"name": "../other"})
+
+    assert bad.status_code == 422
+    assert client.get("/api/workpieces/rename-safe").status_code == 200
+    assert not (TEST_HOME / ".autoopshub" / "other").exists()
+
+    client.delete("/api/workpieces/rename-safe")
