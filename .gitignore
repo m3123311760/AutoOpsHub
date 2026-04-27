@@ -1,0 +1,49 @@
+# Python bytecode and caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment and local secrets
+.env
+.env.*
+!.env.example
+
+# Local IDE/editor state
+.agents/
+.claude/
+.codex/
+.cursor/
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Runtime artifacts and logs
+*.log
+*.pid
+logs/
+
+# Local databases and generated state
+*.db
+*.sqlite
+*.sqlite3
+.autoopshub/
+
+# Test scratch data
+tests/.tmp-home*/
+
+# OS files
+.DS_Store
+Thumbs.db
