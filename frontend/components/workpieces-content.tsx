@@ -186,7 +186,7 @@ export function WorkpiecesContent() {
             >
               <CardContent className="p-0">
                 <Link
-                  href={`/workpieces/${workpiece.name}`}
+                  href={`/workpieces/${encodeURIComponent(workpiece.name)}`}
                   className="block p-6"
                 >
                   <div className="flex items-start justify-between">

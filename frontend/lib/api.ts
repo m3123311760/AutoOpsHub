@@ -1,4 +1,5 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const pathSegment = (value: string) => encodeURIComponent(value);
 
 async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -28,23 +29,23 @@ async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
 // Workpiece APIs
 export const workpieceApi = {
   list: () => fetcher<{ items: Workpiece[] }>("/api/workpieces"),
-  get: (name: string) => fetcher<WorkpieceDetail>(`/api/workpieces/${name}`),
+  get: (name: string) => fetcher<WorkpieceDetail>(`/api/workpieces/${pathSegment(name)}`),
   create: (name: string, description: string) =>
-    fetcher<Workpiece>(`/api/workpieces/${name}`, {
+    fetcher<Workpiece>(`/api/workpieces/${pathSegment(name)}`, {
       method: "POST",
       body: JSON.stringify({ description }),
     }),
   update: (name: string, data: { name?: string; description?: string }) =>
-    fetcher<Workpiece>(`/api/workpieces/${name}`, {
+    fetcher<Workpiece>(`/api/workpieces/${pathSegment(name)}`, {
       method: "PUT",
       body: JSON.stringify(data),
     }),
   delete: (name: string) =>
-    fetcher<null>(`/api/workpieces/${name}`, { method: "DELETE" }),
+    fetcher<null>(`/api/workpieces/${pathSegment(name)}`, { method: "DELETE" }),
   getSetting: (name: string) =>
-    fetcher<WorkpieceSetting>(`/api/workpieces/${name}/setting`),
+    fetcher<WorkpieceSetting>(`/api/workpieces/${pathSegment(name)}/setting`),
   updateSetting: (name: string, setting: WorkpieceSetting) =>
-    fetcher<WorkpieceSetting>(`/api/workpieces/${name}/setting`, {
+    fetcher<WorkpieceSetting>(`/api/workpieces/${pathSegment(name)}/setting`, {
       method: "PUT",
       body: JSON.stringify(setting),
     }),
@@ -53,24 +54,24 @@ export const workpieceApi = {
 // Runbook APIs
 export const runbookApi = {
   list: (workpiece: string) =>
-    fetcher<{ items: RunbookSummary[] }>(`/api/workpieces/${workpiece}/runbooks`),
+    fetcher<{ items: RunbookSummary[] }>(`/api/workpieces/${pathSegment(workpiece)}/runbooks`),
   get: (workpiece: string, name: string) =>
-    fetcher<Runbook>(`/api/workpieces/${workpiece}/runbooks/${name}`),
+    fetcher<Runbook>(`/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}`),
   upsert: (workpiece: string, name: string, data: RunbookUpsertRequest) =>
-    fetcher<Runbook>(`/api/workpieces/${workpiece}/runbooks/${name}`, {
+    fetcher<Runbook>(`/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
   delete: (workpiece: string, name: string) =>
-    fetcher<null>(`/api/workpieces/${workpiece}/runbooks/${name}`, {
+    fetcher<null>(`/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}`, {
       method: "DELETE",
     }),
   getManifest: (workpiece: string, name: string) =>
     fetcher<{ items: ManifestVariable[] }>(
-      `/api/workpieces/${workpiece}/runbooks/${name}/manifest`
+      `/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}/manifest`
     ),
   trigger: (workpiece: string, name: string, variables: Record<string, unknown>) =>
-    fetcher<TriggerResponse>(`/api/workpieces/${workpiece}/runbooks/${name}/trigger`, {
+    fetcher<TriggerResponse>(`/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}/trigger`, {
       method: "POST",
       body: JSON.stringify({ variables }),
     }),
@@ -79,44 +80,44 @@ export const runbookApi = {
 // Task APIs
 export const taskApi = {
   list: (workpiece: string) =>
-    fetcher<{ items: TaskSummary[] }>(`/api/workpieces/${workpiece}/tasks`),
+    fetcher<{ items: TaskSummary[] }>(`/api/workpieces/${pathSegment(workpiece)}/tasks`),
   get: (workpiece: string, taskId: string) =>
-    fetcher<Task>(`/api/workpieces/${workpiece}/tasks/${taskId}`),
+    fetcher<Task>(`/api/workpieces/${pathSegment(workpiece)}/tasks/${pathSegment(taskId)}`),
   updateVariables: (workpiece: string, taskId: string, variables: Record<string, unknown>) =>
-    fetcher<Task>(`/api/workpieces/${workpiece}/tasks/${taskId}/variables`, {
+    fetcher<Task>(`/api/workpieces/${pathSegment(workpiece)}/tasks/${pathSegment(taskId)}/variables`, {
       method: "PUT",
       body: JSON.stringify({ variables }),
     }),
   confirm: (workpiece: string, taskId: string) =>
-    fetcher<{ task: Task }>(`/api/workpieces/${workpiece}/tasks/${taskId}/confirm`, {
+    fetcher<{ task: Task }>(`/api/workpieces/${pathSegment(workpiece)}/tasks/${pathSegment(taskId)}/confirm`, {
       method: "POST",
     }),
   cancel: (workpiece: string, taskId: string) =>
-    fetcher<Task>(`/api/workpieces/${workpiece}/tasks/${taskId}/cancel`, {
+    fetcher<Task>(`/api/workpieces/${pathSegment(workpiece)}/tasks/${pathSegment(taskId)}/cancel`, {
       method: "POST",
     }),
   getLogs: (workpiece: string, taskId: string) =>
-    fetcher<{ items: LogRecord[] }>(`/api/workpieces/${workpiece}/tasks/${taskId}/logs`),
+    fetcher<{ items: LogRecord[] }>(`/api/workpieces/${pathSegment(workpiece)}/tasks/${pathSegment(taskId)}/logs`),
 };
 
 // Job APIs
 export const jobApi = {
   list: (workpiece: string) =>
-    fetcher<{ items: Job[] }>(`/api/workpieces/${workpiece}/jobs`),
+    fetcher<{ items: Job[] }>(`/api/workpieces/${pathSegment(workpiece)}/jobs`),
   get: (workpiece: string, name: string) =>
-    fetcher<Job>(`/api/workpieces/${workpiece}/jobs/${name}`),
+    fetcher<Job>(`/api/workpieces/${pathSegment(workpiece)}/jobs/${pathSegment(name)}`),
   upsert: (workpiece: string, name: string, data: JobUpsertRequest) =>
-    fetcher<Job>(`/api/workpieces/${workpiece}/jobs/${name}`, {
+    fetcher<Job>(`/api/workpieces/${pathSegment(workpiece)}/jobs/${pathSegment(name)}`, {
       method: "POST",
       body: JSON.stringify(data),
     }),
   update: (workpiece: string, name: string, data: JobUpsertRequest) =>
-    fetcher<Job>(`/api/workpieces/${workpiece}/jobs/${name}`, {
+    fetcher<Job>(`/api/workpieces/${pathSegment(workpiece)}/jobs/${pathSegment(name)}`, {
       method: "PUT",
       body: JSON.stringify(data),
     }),
   delete: (workpiece: string, name: string) =>
-    fetcher<null>(`/api/workpieces/${workpiece}/jobs/${name}`, { method: "DELETE" }),
+    fetcher<null>(`/api/workpieces/${pathSegment(workpiece)}/jobs/${pathSegment(name)}`, { method: "DELETE" }),
 };
 
 // Auth APIs

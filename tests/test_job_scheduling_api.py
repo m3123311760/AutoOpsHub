@@ -78,6 +78,27 @@ def test_job_trigger_creates_job_task():
     assert task["runbook_name"] == "job-rb"
 
 
+def test_job_update_without_variables_preserves_existing_variables():
+    client.delete("/api/workpieces/job-wp/jobs/preserve-vars")
+    create = client.post(
+        "/api/workpieces/job-wp/jobs/preserve-vars",
+        json={
+            "cron": "* * * * *",
+            "runbook_name": "job-rb",
+            "variables": {"name": "from-job"},
+        },
+    )
+    assert create.status_code == 201
+
+    update = client.put(
+        "/api/workpieces/job-wp/jobs/preserve-vars",
+        json={"cron": "*/10 * * * *", "enabled": False},
+    )
+
+    assert update.status_code == 200
+    assert update.json()["variables"] == {"name": "from-job"}
+
+
 def test_job_trigger_with_unknown_variables_stays_pending():
     create = client.post(
         "/api/workpieces/job-wp/jobs/bad-vars",

@@ -41,6 +41,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
   const runbooks = runbooksData?.items || [];
   const tasks = tasksData?.items || [];
   const recentTasks = tasks.slice(0, 5);
+  const workpieceHref = `/workpieces/${encodeURIComponent(workpiece)}`;
 
   if (detailLoading) {
     return (
@@ -64,7 +65,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
       title: "运行手册",
       value: detail?.stats.runbooks || 0,
       icon: BookOpen,
-      href: `/workpieces/${workpiece}/runbooks`,
+      href: `${workpieceHref}/runbooks`,
       color: "text-info",
       bgColor: "bg-info/10",
     },
@@ -72,7 +73,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
       title: "任务",
       value: detail?.stats.tasks || 0,
       icon: ListTodo,
-      href: `/workpieces/${workpiece}/tasks`,
+      href: `${workpieceHref}/tasks`,
       color: "text-warning",
       bgColor: "bg-warning/10",
     },
@@ -80,7 +81,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
       title: "定时作业",
       value: detail?.stats.jobs || 0,
       icon: Clock,
-      href: `/workpieces/${workpiece}/jobs`,
+      href: `${workpieceHref}/jobs`,
       color: "text-success",
       bgColor: "bg-success/10",
     },
@@ -114,7 +115,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">运行手册</CardTitle>
-            <Link href={`/workpieces/${workpiece}/runbooks`}>
+            <Link href={`${workpieceHref}/runbooks`}>
               <Button variant="ghost" size="sm">
                 查看全部
                 <ArrowRight className="ml-1 h-4 w-4" />
@@ -126,7 +127,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
               <div className="flex flex-col items-center justify-center py-8 text-center">
                 <BookOpen className="h-8 w-8 text-muted-foreground" />
                 <p className="mt-2 text-sm text-muted-foreground">暂无运行手册</p>
-                <Link href={`/workpieces/${workpiece}/runbooks`} className="mt-4">
+                <Link href={`${workpieceHref}/runbooks`} className="mt-4">
                   <Button size="sm">创建运行手册</Button>
                 </Link>
               </div>
@@ -135,7 +136,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
                 {runbooks.slice(0, 5).map((runbook: RunbookSummary) => (
                   <Link
                     key={runbook.name}
-                    href={`/workpieces/${workpiece}/runbooks`}
+                    href={`${workpieceHref}/runbooks`}
                     className="flex items-center justify-between py-3 transition-colors hover:bg-accent/50"
                   >
                     <div>
@@ -156,7 +157,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">最近任务</CardTitle>
-            <Link href={`/workpieces/${workpiece}/tasks`}>
+            <Link href={`${workpieceHref}/tasks`}>
               <Button variant="ghost" size="sm">
                 查看全部
                 <ArrowRight className="ml-1 h-4 w-4" />
@@ -174,7 +175,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
                 {recentTasks.map((task: TaskSummary) => (
                   <Link
                     key={task.task_id}
-                    href={`/workpieces/${workpiece}/tasks`}
+                    href={`${workpieceHref}/tasks`}
                     className="flex items-center justify-between py-3 transition-colors hover:bg-accent/50"
                   >
                     <div>

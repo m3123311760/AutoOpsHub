@@ -1225,7 +1225,7 @@ async def update_job(workpiece_name: str, job_name: str, body: JobUpsertRequest)
         description=body.description,
         cron=body.cron,
         runbook_name=runbook_name,
-        variables=body.variables,
+        variables=body.variables if "variables" in body.model_fields_set else current.variables,
         enabled=body.enabled,
         next_run_at=_next_run_at(body.cron) if body.enabled else None,
         created_at=current.created_at,
