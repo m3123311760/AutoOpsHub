@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
 
 const captured = [];
+let nextResponse = null;
 
 globalThis.fetch = async (url, options) => {
   captured.push({ url: String(url), options });
-  return {
+  const response = nextResponse || {
     ok: true,
     status: 200,
     json: async () => ({}),
   };
+  nextResponse = null;
+  return response;
 };
 
 const { authApi, jobApi, runbookApi, taskApi, workpieceApi } = await import("./api.ts");
@@ -17,6 +20,8 @@ const { recentTasks, workpieceHref, workpieceRouteParam } = await import("./rout
 
 afterEach(() => {
   captured.length = 0;
+  nextResponse = null;
+  delete globalThis.window;
 });
 
 test("API clients encode dynamic path segments", async () => {
@@ -73,6 +78,62 @@ test("auth API clients cover login and API key management", async () => {
     "http://localhost:8000/api/auth/api-keys/key%231%3F"
   );
   assert.equal(captured[3].options.method, "DELETE");
+});
+
+test("fetcher redirects protected 401 responses to login with a return path", async () => {
+  const removed = [];
+  globalThis.window = {
+    location: {
+      pathname: "/workpieces/team",
+      search: "?tab=jobs",
+      href: "",
+    },
+    localStorage: {
+      getItem: (key) => (key === "token" ? "stale-token" : null),
+      removeItem: (key) => removed.push(key),
+    },
+  };
+  nextResponse = {
+    ok: false,
+    status: 401,
+    json: async () => ({ detail: "认证失败" }),
+  };
+
+  await assert.rejects(() => workpieceApi.list(), /认证失败/);
+
+  assert.deepEqual(removed, [
+    "token",
+    "token_expires_at",
+    "principal_username",
+    "auth_mode",
+  ]);
+  assert.equal(
+    globalThis.window.location.href,
+    "/login?next=%2Fworkpieces%2Fteam%3Ftab%3Djobs"
+  );
+});
+
+test("login 401 responses stay on the login page for inline errors", async () => {
+  globalThis.window = {
+    location: {
+      pathname: "/login",
+      search: "",
+      href: "",
+    },
+    localStorage: {
+      getItem: () => null,
+      removeItem: () => {},
+    },
+  };
+  nextResponse = {
+    ok: false,
+    status: 401,
+    json: async () => ({ detail: "认证失败" }),
+  };
+
+  await assert.rejects(() => authApi.login("local", "admin", "bad"), /认证失败/);
+
+  assert.equal(globalThis.window.location.href, "");
 });
 
 test("workpiece route helper encodes only the workpiece path segment", () => {

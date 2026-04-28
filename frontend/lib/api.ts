@@ -1,8 +1,29 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const pathSegment = (value: string) => encodeURIComponent(value);
+const AUTH_STORAGE_KEYS = ["token", "token_expires_at", "principal_username", "auth_mode"];
+
+function browserStorage(): Storage | null {
+  return typeof window !== "undefined" ? window.localStorage : null;
+}
+
+function clearAuthStorage() {
+  const storage = browserStorage();
+  if (!storage) return;
+  for (const key of AUTH_STORAGE_KEYS) {
+    storage.removeItem(key);
+  }
+}
+
+function redirectToLogin() {
+  if (typeof window === "undefined" || window.location.pathname === "/login") {
+    return;
+  }
+  const next = `${window.location.pathname}${window.location.search}` || "/";
+  window.location.href = `/login?next=${encodeURIComponent(next)}`;
+}
 
 async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
-  const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
+  const token = browserStorage()?.getItem("token") || null;
   const headers: HeadersInit = {
     ...(options?.body ? { "Content-Type": "application/json" } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -16,6 +37,10 @@ async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const error = await res.json().catch(() => ({ detail: "请求失败" }));
+    if (res.status === 401 && url !== "/api/auth/login") {
+      clearAuthStorage();
+      redirectToLogin();
+    }
     throw new Error(error.detail || "请求失败");
   }
 
