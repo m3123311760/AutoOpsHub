@@ -43,6 +43,14 @@ test("API clients encode dynamic path segments", async () => {
   );
 });
 
+test("fetcher only sends JSON content type when a body is present", async () => {
+  await workpieceApi.list();
+  await workpieceApi.create("team", "demo");
+
+  assert.equal(captured[0].options.headers["Content-Type"], undefined);
+  assert.equal(captured[1].options.headers["Content-Type"], "application/json");
+});
+
 test("workpiece route helper encodes only the workpiece path segment", () => {
   assert.equal(workpieceHref("team #1?"), "/workpieces/team%20%231%3F");
   assert.equal(

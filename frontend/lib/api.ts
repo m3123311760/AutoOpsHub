@@ -4,7 +4,7 @@ const pathSegment = (value: string) => encodeURIComponent(value);
 async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
   const token = typeof window !== "undefined" ? localStorage.getItem("token") : null;
   const headers: HeadersInit = {
-    "Content-Type": "application/json",
+    ...(options?.body ? { "Content-Type": "application/json" } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options?.headers,
   };
