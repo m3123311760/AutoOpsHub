@@ -123,7 +123,7 @@ export const jobApi = {
 // Auth APIs
 export const authApi = {
   login: (mode: "local" | "ldap" | "ad", username: string, password: string) =>
-    fetcher<{ token: string; expires_at: string }>("/api/auth/login", {
+    fetcher<AuthLoginResponse>("/api/auth/login", {
       method: "POST",
       body: JSON.stringify({ mode, username, password }),
     }),
@@ -253,6 +253,16 @@ export interface LogRecord {
   ts: string;
   level: "info" | "warn" | "error";
   message: string;
+}
+
+export interface AuthLoginResponse {
+  access_token: string;
+  token_type: "bearer";
+  expires_at: string;
+  principal: {
+    username: string;
+    auth_mode: "local" | "ldap" | "ad";
+  };
 }
 
 export { fetcher };

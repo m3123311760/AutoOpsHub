@@ -972,6 +972,12 @@ async def upsert_runbook(workpiece_name: str, runbook_name: str, body: RunbookUp
     }
 
 
+@app.get("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}")
+async def get_runbook(workpiece_name: str, runbook_name: str) -> dict[str, Any]:
+    _load_meta(workpiece_name)
+    return _load_runbook(workpiece_name, runbook_name).model_dump()
+
+
 @app.delete("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}", status_code=204)
 async def delete_runbook(workpiece_name: str, runbook_name: str) -> Response:
     _load_meta(workpiece_name)
