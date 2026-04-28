@@ -8,6 +8,7 @@ import {
   BookOpen,
   ListTodo,
   Clock,
+  KeyRound,
   Settings,
   Terminal,
 } from "lucide-react";
@@ -30,6 +31,11 @@ const mainNav: NavItem[] = [
     title: "工作区",
     href: "/workpieces",
     icon: FolderKanban,
+  },
+  {
+    title: "API Key",
+    href: "/auth/api-keys",
+    icon: KeyRound,
   },
 ];
 

@@ -1,6 +1,9 @@
 "use client";
 
-import { Bell, Search, User } from "lucide-react";
+import Link from "next/link";
+import { useRouter } from "next/navigation";
+import { Bell, LogOut, Search, User } from "lucide-react";
+import { authApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
@@ -10,6 +13,23 @@ interface HeaderProps {
 }
 
 export function Header({ title, description }: HeaderProps) {
+  const router = useRouter();
+
+  async function handleLogout() {
+    try {
+      await authApi.logout();
+    } catch {
+      // The token should still be cleared locally if the server-side session is already gone.
+    } finally {
+      localStorage.removeItem("token");
+      localStorage.removeItem("token_expires_at");
+      localStorage.removeItem("principal_username");
+      localStorage.removeItem("auth_mode");
+      router.push("/login");
+      router.refresh();
+    }
+  }
+
   return (
     <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-border bg-background/95 px-6 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div>
@@ -36,9 +56,14 @@ export function Header({ title, description }: HeaderProps) {
           <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary" />
         </Button>
 
-        {/* User */}
-        <Button variant="ghost" size="icon">
-          <User className="h-4 w-4" />
+        <Button variant="ghost" size="icon" asChild>
+          <Link href="/login" aria-label="登录">
+            <User className="h-4 w-4" />
+          </Link>
+        </Button>
+
+        <Button variant="ghost" size="icon" onClick={handleLogout} aria-label="退出登录">
+          <LogOut className="h-4 w-4" />
         </Button>
       </div>
     </header>

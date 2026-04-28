@@ -12,7 +12,7 @@ globalThis.fetch = async (url, options) => {
   };
 };
 
-const { jobApi, runbookApi, taskApi, workpieceApi } = await import("./api.ts");
+const { authApi, jobApi, runbookApi, taskApi, workpieceApi } = await import("./api.ts");
 const { recentTasks, workpieceHref, workpieceRouteParam } = await import("./routes.ts");
 
 afterEach(() => {
@@ -49,6 +49,30 @@ test("fetcher only sends JSON content type when a body is present", async () => 
 
   assert.equal(captured[0].options.headers["Content-Type"], undefined);
   assert.equal(captured[1].options.headers["Content-Type"], "application/json");
+});
+
+test("auth API clients cover login and API key management", async () => {
+  await authApi.login("local", "admin", "secret");
+  await authApi.listApiKeys();
+  await authApi.createApiKey("ci");
+  await authApi.revokeApiKey("key#1?");
+
+  assert.equal(captured[0].url, "http://localhost:8000/api/auth/login");
+  assert.equal(captured[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(captured[0].options.body), {
+    mode: "local",
+    username: "admin",
+    password: "secret",
+  });
+  assert.equal(captured[1].url, "http://localhost:8000/api/auth/api-keys");
+  assert.equal(captured[1].options?.method, undefined);
+  assert.equal(captured[2].url, "http://localhost:8000/api/auth/api-keys");
+  assert.equal(captured[2].options.method, "POST");
+  assert.equal(
+    captured[3].url,
+    "http://localhost:8000/api/auth/api-keys/key%231%3F"
+  );
+  assert.equal(captured[3].options.method, "DELETE");
 });
 
 test("workpiece route helper encodes only the workpiece path segment", () => {

@@ -129,6 +129,16 @@ export const authApi = {
     }),
   logout: () =>
     fetcher<null>("/api/auth/jwt/revoke", { method: "POST" }),
+  listApiKeys: () => fetcher<{ items: ApiKeyRecord[] }>("/api/auth/api-keys"),
+  createApiKey: (name: string) =>
+    fetcher<ApiKeyCreateResponse>("/api/auth/api-keys", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  revokeApiKey: (keyId: string) =>
+    fetcher<null>(`/api/auth/api-keys/${pathSegment(keyId)}`, {
+      method: "DELETE",
+    }),
 };
 
 // Types
@@ -263,6 +273,21 @@ export interface AuthLoginResponse {
     username: string;
     auth_mode: "local" | "ldap" | "ad";
   };
+}
+
+export interface ApiKeyRecord {
+  id: string;
+  name: string;
+  key_prefix: string;
+  created_at: string;
+  revoked_at?: string | null;
+}
+
+export interface ApiKeyCreateResponse {
+  id: string;
+  name: string;
+  api_key: string;
+  prefix: string;
 }
 
 export { fetcher };
