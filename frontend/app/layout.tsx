@@ -1,16 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jetbrains-mono",
-});
 
 export const metadata: Metadata = {
   title: "AutoOpsHub - 自动化运维平台",
@@ -29,7 +18,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="zh-CN" className={`${inter.variable} ${jetbrainsMono.variable} bg-background`}>
+    <html lang="zh-CN" className="bg-background">
       <body className="min-h-screen font-sans antialiased">
         {children}
       </body>
