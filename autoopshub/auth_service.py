@@ -10,14 +10,25 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
+import bcrypt
 import jwt
 from fastapi import HTTPException, status
-from passlib.context import CryptContext
 
 from autoopshub.db_schema import mysql_connect
 from autoopshub.settings import AppSettings
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+class BcryptPasswordContext:
+    def hash(self, value: str) -> str:
+        return bcrypt.hashpw(value.encode("utf-8"), bcrypt.gensalt(rounds=12)).decode("utf-8")
+
+    def verify(self, value: str, hashed: str) -> bool:
+        try:
+            return bcrypt.checkpw(value.encode("utf-8"), hashed.encode("utf-8"))
+        except ValueError:
+            return False
+
+
+pwd_context = BcryptPasswordContext()
 
 AuthMode = Literal["local", "ldap", "ad"]
 

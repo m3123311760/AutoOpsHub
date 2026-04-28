@@ -713,6 +713,15 @@ cors_origins = [
     if origin.strip()
 ]
 
+def _assert_auth_schema_ready() -> None:
+    try:
+        assert_auth_schema_present(settings)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"认证数据库不可用: {exc}") from exc
+
+
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
     if request.method == "OPTIONS":
@@ -758,7 +767,10 @@ def _startup_check_auth_schema() -> None:
         return
     if not settings.jwt.secret.strip():
         return
-    assert_auth_schema_present(settings)
+    try:
+        assert_auth_schema_present(settings)
+    except Exception as exc:  # noqa: BLE001
+        print(f"认证数据库启动检查失败: {exc}")
 
 
 @app.get("/")
@@ -785,7 +797,7 @@ async def logging_health() -> dict[str, Any]:
 
 @app.post("/api/auth/login")
 async def auth_login(body: AuthLoginRequest) -> dict[str, Any]:
-    assert_auth_schema_present(settings)
+    _assert_auth_schema_ready()
     return auth_svc.login(body.mode, body.username, body.password)
 
 
@@ -800,13 +812,13 @@ async def auth_jwt_revoke(authorization: str | None = Header(None)) -> Response:
 
 @app.post("/api/auth/api-keys", status_code=201)
 async def auth_create_api_key(body: ApiKeyCreateRequest) -> dict[str, Any]:
-    assert_auth_schema_present(settings)
+    _assert_auth_schema_ready()
     return auth_svc.create_api_key(body.name or "default")
 
 
 @app.get("/api/auth/api-keys")
 async def auth_list_api_keys() -> dict[str, list[dict[str, Any]]]:
-    assert_auth_schema_present(settings)
+    _assert_auth_schema_ready()
     rows = auth_svc.list_api_keys()
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -826,7 +838,7 @@ async def auth_list_api_keys() -> dict[str, list[dict[str, Any]]]:
 
 @app.delete("/api/auth/api-keys/{key_id}", status_code=204)
 async def auth_revoke_api_key(key_id: str) -> Response:
-    assert_auth_schema_present(settings)
+    _assert_auth_schema_ready()
     auth_svc.revoke_api_key(key_id)
     return Response(status_code=204)
 

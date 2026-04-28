@@ -52,7 +52,7 @@ class MySQLSettings:
     host: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _env_int("AUTOOPSHUB_MYSQL_PORT", 3306))
     user: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_USER", "autoopshub"))
-    password: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_PASSWORD", ""))
+    password: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_PASSWORD", "autoopshub"))
     database: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_DATABASE", "autoopshub"))
 
 
@@ -80,7 +80,7 @@ class ADSettings:
 
 @dataclass
 class JWTSettings:
-    secret: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_JWT_SECRET", ""))
+    secret: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_JWT_SECRET", "autoopshub-local-dev-secret"))
     algorithm: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_JWT_ALGORITHM", "HS256"))
     expire_minutes: int = field(default_factory=lambda: _env_int("AUTOOPSHUB_JWT_EXPIRE_MINUTES", 60))
 

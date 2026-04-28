@@ -66,11 +66,31 @@ def test_databases_init_sql_seeds_default_local_admin_without_plaintext_password
     assert "ChangeMe123!" not in sql
 
 
-def test_requirements_pin_bcrypt_below_passlib_incompatible_major() -> None:
+def test_auth_password_context_verifies_seeded_admin_password() -> None:
+    root = Path(__file__).resolve().parents[1]
+    sql = (root / "databases-init.sql").read_text(encoding="utf-8")
+    match = re.search(r"VALUES \('admin', '([^']+)'\)", sql)
+    assert match is not None
+
+    assert auth_service.pwd_context.verify("ChangeMe123!", match.group(1))
+
+
+def test_requirements_use_direct_bcrypt_without_passlib_adapter() -> None:
     root = Path(__file__).resolve().parents[1]
     requirements = (root / "requirements.txt").read_text(encoding="utf-8")
 
-    assert "bcrypt>=4.0,<5" in requirements
+    assert "bcrypt>=4.0,<6" in requirements
+    assert "passlib" not in requirements
+
+
+def test_default_auth_settings_match_local_compose(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AUTOOPSHUB_MYSQL_PASSWORD", raising=False)
+    monkeypatch.delenv("AUTOOPSHUB_JWT_SECRET", raising=False)
+
+    settings = load_settings()
+
+    assert settings.mysql.password == "autoopshub"
+    assert settings.jwt.secret
 
 
 def test_script_runtime_takes_precedence_over_shebang(monkeypatch: pytest.MonkeyPatch) -> None:
