@@ -13,6 +13,7 @@ from uuid import uuid4
 import yaml
 from croniter import croniter
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from jinja2 import Environment, meta
 from jinja2 import Template
@@ -696,6 +697,23 @@ app = FastAPI()
 settings = load_settings()
 log_mgr = LogBackendManager(settings)
 auth_svc = AuthService(settings)
+
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "AUTOOPSHUB_CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).split(",")
+    if origin.strip()
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
