@@ -13,6 +13,7 @@ globalThis.fetch = async (url, options) => {
 };
 
 const { jobApi, runbookApi, taskApi, workpieceApi } = await import("./api.ts");
+const { workpieceHref } = await import("./routes.ts");
 
 afterEach(() => {
   captured.length = 0;
@@ -39,5 +40,17 @@ test("API clients encode dynamic path segments", async () => {
   assert.equal(
     captured[3].url,
     "http://localhost:8000/api/workpieces/team%20%231%3F/jobs/nightly%231%3F"
+  );
+});
+
+test("workpiece route helper encodes only the workpiece path segment", () => {
+  assert.equal(workpieceHref("team #1?"), "/workpieces/team%20%231%3F");
+  assert.equal(
+    workpieceHref("team #1?", "/runbooks"),
+    "/workpieces/team%20%231%3F/runbooks"
+  );
+  assert.equal(
+    workpieceHref("team%ready", "/tasks"),
+    "/workpieces/team%25ready/tasks"
   );
 });

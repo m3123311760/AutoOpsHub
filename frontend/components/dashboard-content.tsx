@@ -17,6 +17,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { workpieceApi, type Workpiece } from "@/lib/api";
+import { workpieceHref } from "@/lib/routes";
 
 const fetcher = () => workpieceApi.list();
 
@@ -144,7 +145,7 @@ export function DashboardContent() {
               {workpieces.map((workpiece: Workpiece) => (
                 <Link
                   key={workpiece.name}
-                  href={`/workpieces/${workpiece.name}`}
+                  href={workpieceHref(workpiece.name)}
                   className="flex items-center justify-between py-4 transition-colors hover:bg-accent/50"
                 >
                   <div className="flex items-center gap-4">

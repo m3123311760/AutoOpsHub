@@ -11,6 +11,7 @@ import {
   Settings,
   Terminal,
 } from "lucide-react";
+import { workpieceHref } from "@/lib/routes";
 import { cn } from "@/lib/utils";
 
 interface NavItem {
@@ -108,7 +109,7 @@ export function Sidebar({ currentWorkpiece }: SidebarProps) {
               </div>
               <div className="space-y-1">
                 {workpieceNav.map((item) => {
-                  const href = `/workpieces/${currentWorkpiece}${item.href}`;
+                  const href = workpieceHref(currentWorkpiece, item.href);
                   const isActive = pathname === href;
                   return (
                     <Link
