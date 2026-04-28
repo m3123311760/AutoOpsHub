@@ -11,6 +11,12 @@ CREATE TABLE IF NOT EXISTS auth_users (
   UNIQUE KEY uq_auth_users_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='本地认证用户';
 
+-- 默认本地管理员账号：admin；密码哈希对应初始部署密码，首次部署后应立即替换。
+-- 使用幂等插入，避免重复执行初始化脚本时覆盖已经修改过的密码哈希。
+INSERT INTO auth_users (username, password_hash)
+VALUES ('admin', '$2b$12$yGmegtsVYLhP3VX741erCOHUNAYJ00GBWftl1Czn.tRog.WzfFAWq')
+ON DUPLICATE KEY UPDATE id = id;
+
 CREATE TABLE IF NOT EXISTS auth_jwt_sessions (
   jti CHAR(36) NOT NULL COMMENT 'JWT ID',
   subject_username VARCHAR(191) NOT NULL COMMENT '主体用户名',
