@@ -110,6 +110,11 @@ export const jobApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  update: (workpiece: string, name: string, data: JobUpsertRequest) =>
+    fetcher<Job>(`/api/workpieces/${workpiece}/jobs/${name}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    }),
   delete: (workpiece: string, name: string) =>
     fetcher<null>(`/api/workpieces/${workpiece}/jobs/${name}`, { method: "DELETE" }),
 };
