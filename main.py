@@ -707,15 +707,6 @@ cors_origins = [
     if origin.strip()
 ]
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=cors_origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
     if request.method == "OPTIONS":
@@ -744,6 +735,15 @@ async def _auth_middleware(request: Request, call_next):  # type: ignore[no-unty
     except HTTPException as exc:
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
     return JSONResponse(status_code=401, content={"detail": "未认证"})
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
@@ -975,7 +975,10 @@ async def upsert_runbook(workpiece_name: str, runbook_name: str, body: RunbookUp
 @app.get("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}")
 async def get_runbook(workpiece_name: str, runbook_name: str) -> dict[str, Any]:
     _load_meta(workpiece_name)
-    return _load_runbook(workpiece_name, runbook_name).model_dump()
+    runbook = _load_runbook(workpiece_name, runbook_name)
+    payload = runbook.model_dump()
+    payload["manifest_summary"] = {"variables": len(_load_manifest(workpiece_name, runbook.name))}
+    return payload
 
 
 @app.delete("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}", status_code=204)
