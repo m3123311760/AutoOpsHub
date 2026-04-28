@@ -388,6 +388,12 @@ def _load_manifest(workpiece_name: str, runbook_name: str) -> list[ManifestVaria
     return [ManifestVariable.model_validate(item) for item in payload.get("items", [])]
 
 
+def _runbook_payload(workpiece_name: str, runbook: RunbookRecord) -> dict[str, Any]:
+    payload = runbook.model_dump()
+    payload["manifest_summary"] = {"variables": len(_load_manifest(workpiece_name, runbook.name))}
+    return payload
+
+
 def _save_task(workpiece_name: str, task: TaskRecord) -> None:
     _write_json(_task_path(workpiece_name, task.task_id), task.model_dump())
 
@@ -963,22 +969,14 @@ async def upsert_runbook(workpiece_name: str, runbook_name: str, body: RunbookUp
     template_vars = _combined_template_var_names(body.content)
     merged_manifest = _normalize_manifest(template_vars, body.manifest)
     _save_manifest(workpiece_name, runbook_name, merged_manifest)
-    return {
-        "name": runbook.name,
-        "type": runbook.type.value,
-        "description": runbook.description,
-        "created_at": runbook.created_at,
-        "updated_at": runbook.updated_at,
-    }
+    return _runbook_payload(workpiece_name, runbook)
 
 
 @app.get("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}")
 async def get_runbook(workpiece_name: str, runbook_name: str) -> dict[str, Any]:
     _load_meta(workpiece_name)
     runbook = _load_runbook(workpiece_name, runbook_name)
-    payload = runbook.model_dump()
-    payload["manifest_summary"] = {"variables": len(_load_manifest(workpiece_name, runbook.name))}
-    return payload
+    return _runbook_payload(workpiece_name, runbook)
 
 
 @app.delete("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}", status_code=204)

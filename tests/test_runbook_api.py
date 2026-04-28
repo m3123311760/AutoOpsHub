@@ -30,6 +30,9 @@ def test_runbook_create_list_manifest_and_delete():
         },
     )
     assert create.status_code == 201
+    assert create.json()["content"] == "echo {{env}} {{region}}"
+    assert create.json()["runtime"] == "python"
+    assert create.json()["manifest_summary"] == {"variables": 2}
 
     list_resp = client.get("/api/workpieces/demo/runbooks")
     assert list_resp.status_code == 200
