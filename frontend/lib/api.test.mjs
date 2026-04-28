@@ -13,7 +13,7 @@ globalThis.fetch = async (url, options) => {
 };
 
 const { jobApi, runbookApi, taskApi, workpieceApi } = await import("./api.ts");
-const { workpieceHref } = await import("./routes.ts");
+const { recentTasks, workpieceHref, workpieceRouteParam } = await import("./routes.ts");
 
 afterEach(() => {
   captured.length = 0;
@@ -52,5 +52,23 @@ test("workpiece route helper encodes only the workpiece path segment", () => {
   assert.equal(
     workpieceHref("team%ready", "/tasks"),
     "/workpieces/team%25ready/tasks"
+  );
+});
+
+test("workpiece route params are used without a second decode", () => {
+  assert.equal(workpieceRouteParam("team%ready"), "team%ready");
+  assert.equal(workpieceRouteParam("team%2Fready"), "team%2Fready");
+});
+
+test("recent tasks are sorted by creation time before limiting", () => {
+  const tasks = [
+    { task_id: "old", created_at: "2026-04-28T01:00:00Z" },
+    { task_id: "newest", created_at: "2026-04-28T03:00:00Z" },
+    { task_id: "middle", created_at: "2026-04-28T02:00:00Z" },
+  ];
+
+  assert.deepEqual(
+    recentTasks(tasks, 2).map((task) => task.task_id),
+    ["newest", "middle"]
   );
 });

@@ -15,7 +15,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { workpieceApi, runbookApi, taskApi, type RunbookSummary, type TaskSummary } from "@/lib/api";
-import { workpieceHref } from "@/lib/routes";
+import { recentTasks as getRecentTasks, workpieceHref } from "@/lib/routes";
 import { formatDate } from "@/lib/utils";
 import { StatusBadge } from "@/components/status-badge";
 
@@ -41,7 +41,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
 
   const runbooks = runbooksData?.items || [];
   const tasks = tasksData?.items || [];
-  const recentTasks = tasks.slice(0, 5);
+  const recentTasks = getRecentTasks(tasks);
   const baseHref = workpieceHref(workpiece);
 
   if (detailLoading) {
