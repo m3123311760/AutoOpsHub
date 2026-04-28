@@ -15,7 +15,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { workpieceApi, runbookApi, taskApi, type RunbookSummary, type TaskSummary } from "@/lib/api";
-import { recentTasks as getRecentTasks, workpieceHref } from "@/lib/routes";
+import { recentTasks as selectRecentTasks, workpieceHref } from "@/lib/routes";
 import { formatDate } from "@/lib/utils";
 import { StatusBadge } from "@/components/status-badge";
 
@@ -41,8 +41,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
 
   const runbooks = runbooksData?.items || [];
   const tasks = tasksData?.items || [];
-  const recentTasks = getRecentTasks(tasks);
-  const baseHref = workpieceHref(workpiece);
+  const recentTasks = selectRecentTasks(tasks, 5);
 
   if (detailLoading) {
     return (
@@ -66,7 +65,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
       title: "运行手册",
       value: detail?.stats.runbooks || 0,
       icon: BookOpen,
-      href: `${baseHref}/runbooks`,
+      href: workpieceHref(workpiece, "/runbooks"),
       color: "text-info",
       bgColor: "bg-info/10",
     },
@@ -74,7 +73,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
       title: "任务",
       value: detail?.stats.tasks || 0,
       icon: ListTodo,
-      href: `${baseHref}/tasks`,
+      href: workpieceHref(workpiece, "/tasks"),
       color: "text-warning",
       bgColor: "bg-warning/10",
     },
@@ -82,7 +81,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
       title: "定时作业",
       value: detail?.stats.jobs || 0,
       icon: Clock,
-      href: `${baseHref}/jobs`,
+      href: workpieceHref(workpiece, "/jobs"),
       color: "text-success",
       bgColor: "bg-success/10",
     },
@@ -116,7 +115,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">运行手册</CardTitle>
-            <Link href={`${baseHref}/runbooks`}>
+            <Link href={workpieceHref(workpiece, "/runbooks")}>
               <Button variant="ghost" size="sm">
                 查看全部
                 <ArrowRight className="ml-1 h-4 w-4" />
@@ -128,7 +127,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
               <div className="flex flex-col items-center justify-center py-8 text-center">
                 <BookOpen className="h-8 w-8 text-muted-foreground" />
                 <p className="mt-2 text-sm text-muted-foreground">暂无运行手册</p>
-                <Link href={`${baseHref}/runbooks`} className="mt-4">
+                <Link href={workpieceHref(workpiece, "/runbooks")} className="mt-4">
                   <Button size="sm">创建运行手册</Button>
                 </Link>
               </div>
@@ -137,7 +136,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
                 {runbooks.slice(0, 5).map((runbook: RunbookSummary) => (
                   <Link
                     key={runbook.name}
-                    href={`${baseHref}/runbooks`}
+                    href={workpieceHref(workpiece, "/runbooks")}
                     className="flex items-center justify-between py-3 transition-colors hover:bg-accent/50"
                   >
                     <div>
@@ -158,7 +157,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-base">最近任务</CardTitle>
-            <Link href={`${baseHref}/tasks`}>
+            <Link href={workpieceHref(workpiece, "/tasks")}>
               <Button variant="ghost" size="sm">
                 查看全部
                 <ArrowRight className="ml-1 h-4 w-4" />
@@ -176,7 +175,7 @@ export function WorkpieceDetailContent({ workpiece }: WorkpieceDetailContentProp
                 {recentTasks.map((task: TaskSummary) => (
                   <Link
                     key={task.task_id}
-                    href={`${baseHref}/tasks`}
+                    href={workpieceHref(workpiece, "/tasks")}
                     className="flex items-center justify-between py-3 transition-colors hover:bg-accent/50"
                   >
                     <div>
