@@ -117,14 +117,9 @@ export function JobsContent({ workpiece }: JobsContentProps) {
 
   const toggleEnabled = async (job: Job) => {
     try {
-      const current = await jobApi.get(workpiece, job.job_name);
-      await jobApi.update(workpiece, job.job_name, {
-        job_name: current.job_name,
-        description: current.description,
-        cron: current.cron,
-        runbook_name: current.runbook_name,
-        variables: current.variables,
-        enabled: !current.enabled,
+      await jobApi.upsert(workpiece, job.job_name, {
+        ...job,
+        enabled: !job.enabled,
       });
       mutate(`jobs-${workpiece}`);
     } catch (err) {

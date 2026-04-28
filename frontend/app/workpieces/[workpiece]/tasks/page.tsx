@@ -1,7 +1,6 @@
 import { Sidebar } from "@/components/sidebar";
 import { Header } from "@/components/header";
 import { TasksContent } from "@/components/tasks-content";
-import { workpieceRouteParam } from "@/lib/routes";
 
 interface TasksPageProps {
   params: Promise<{
@@ -11,15 +10,15 @@ interface TasksPageProps {
 
 export default async function TasksPage({ params }: TasksPageProps) {
   const { workpiece } = await params;
-  const workpieceName = workpieceRouteParam(workpiece);
+  const decodedName = decodeURIComponent(workpiece);
 
   return (
     <div className="min-h-screen">
-      <Sidebar currentWorkpiece={workpieceName} />
+      <Sidebar currentWorkpiece={decodedName} />
       <main className="pl-64">
-        <Header title="任务" description={`${workpieceName} 的任务管理`} />
+        <Header title="任务" description={`${decodedName} 的任务管理`} />
         <div className="p-6">
-          <TasksContent workpiece={workpieceName} />
+          <TasksContent workpiece={decodedName} />
         </div>
       </main>
     </div>

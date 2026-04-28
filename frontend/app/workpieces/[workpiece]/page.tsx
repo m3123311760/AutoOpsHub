@@ -1,7 +1,6 @@
 import { Sidebar } from "@/components/sidebar";
 import { Header } from "@/components/header";
 import { WorkpieceDetailContent } from "@/components/workpiece-detail-content";
-import { workpieceRouteParam } from "@/lib/routes";
 
 interface WorkpiecePageProps {
   params: Promise<{
@@ -11,15 +10,15 @@ interface WorkpiecePageProps {
 
 export default async function WorkpieceDetailPage({ params }: WorkpiecePageProps) {
   const { workpiece } = await params;
-  const workpieceName = workpieceRouteParam(workpiece);
+  const decodedName = decodeURIComponent(workpiece);
 
   return (
     <div className="min-h-screen">
-      <Sidebar currentWorkpiece={workpieceName} />
+      <Sidebar currentWorkpiece={decodedName} />
       <main className="pl-64">
-        <Header title={workpieceName} description="工作区详情" />
+        <Header title={decodedName} description="工作区详情" />
         <div className="p-6">
-          <WorkpieceDetailContent workpiece={workpieceName} />
+          <WorkpieceDetailContent workpiece={decodedName} />
         </div>
       </main>
     </div>

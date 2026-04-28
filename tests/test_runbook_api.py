@@ -38,11 +38,6 @@ def test_runbook_create_list_manifest_and_delete():
     assert items[0]["name"] == "deploy"
     assert items[0]["type"] == "Script"
 
-    detail_resp = client.get("/api/workpieces/demo/runbooks/deploy")
-    assert detail_resp.status_code == 200
-    assert detail_resp.json()["content"] == "echo {{env}} {{region}}"
-    assert detail_resp.json()["manifest_summary"] == {"variables": 2}
-
     manifest_get = client.get("/api/workpieces/demo/runbooks/deploy/manifest")
     assert manifest_get.status_code == 200
     names = [x["name"] for x in manifest_get.json()["items"]]

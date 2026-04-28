@@ -34,7 +34,6 @@ ENV/
 *.log
 *.pid
 logs/
-.codex-tmp/
 
 # Frontend dependencies and build output
 node_modules/
@@ -51,9 +50,7 @@ node_modules/
 openspec/
 
 # Test scratch data
-.pytest-tmp-local/
 tests/.tmp-home*/
-tests/.tmp-pytest/
 
 # OS files
 .DS_Store

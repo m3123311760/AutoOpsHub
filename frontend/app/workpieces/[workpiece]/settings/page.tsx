@@ -1,7 +1,6 @@
 import { Sidebar } from "@/components/sidebar";
 import { Header } from "@/components/header";
 import { SettingsContent } from "@/components/settings-content";
-import { workpieceRouteParam } from "@/lib/routes";
 
 interface SettingsPageProps {
   params: Promise<{
@@ -11,15 +10,15 @@ interface SettingsPageProps {
 
 export default async function SettingsPage({ params }: SettingsPageProps) {
   const { workpiece } = await params;
-  const workpieceName = workpieceRouteParam(workpiece);
+  const decodedName = decodeURIComponent(workpiece);
 
   return (
     <div className="min-h-screen">
-      <Sidebar currentWorkpiece={workpieceName} />
+      <Sidebar currentWorkpiece={decodedName} />
       <main className="pl-64">
-        <Header title="设置" description={`${workpieceName} 的工作区设置`} />
+        <Header title="设置" description={`${decodedName} 的工作区设置`} />
         <div className="p-6">
-          <SettingsContent workpiece={workpieceName} />
+          <SettingsContent workpiece={decodedName} />
         </div>
       </main>
     </div>

@@ -31,7 +31,6 @@ import {
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/empty-state";
 import { workpieceApi, type Workpiece } from "@/lib/api";
-import { workpieceHref } from "@/lib/routes";
 import { formatDate } from "@/lib/utils";
 
 const fetcher = () => workpieceApi.list();
@@ -187,7 +186,7 @@ export function WorkpiecesContent() {
             >
               <CardContent className="p-0">
                 <Link
-                  href={workpieceHref(workpiece.name)}
+                  href={`/workpieces/${workpiece.name}`}
                   className="block p-6"
                 >
                   <div className="flex items-start justify-between">

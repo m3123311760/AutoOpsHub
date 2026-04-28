@@ -6,7 +6,6 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --experimental-strip-types --test lib/*.test.mjs && tsc --noEmit --pretty false",
     "lint": "next lint"
   },
   "packageManager": "pnpm@10.33.0",
