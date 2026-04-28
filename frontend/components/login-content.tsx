@@ -4,6 +4,7 @@ import { FormEvent, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LockKeyhole, LogIn, Terminal } from "lucide-react";
 import { authApi } from "@/lib/api";
+import { safeLoginRedirectTarget } from "@/lib/auth-routes";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -38,7 +39,7 @@ export function LoginContent() {
       localStorage.setItem("token_expires_at", result.expires_at);
       localStorage.setItem("principal_username", result.principal.username);
       localStorage.setItem("auth_mode", result.principal.auth_mode);
-      router.replace(searchParams.get("next") || "/");
+      router.replace(safeLoginRedirectTarget(searchParams.get("next")));
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "登录失败");

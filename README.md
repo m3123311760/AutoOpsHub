@@ -19,6 +19,7 @@ docker compose -f docker-compose.yml up -d
 Start the FastAPI application with Uvicorn:
 
 ```powershell
+$env:AUTOOPSHUB_JWT_SECRET = "replace-with-a-long-random-secret"
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -28,7 +29,7 @@ If authentication or MySQL-backed features are enabled, use the local Docker cre
 $env:AUTOOPSHUB_MYSQL_PASSWORD = "autoopshub"
 ```
 
-The application defaults already match this local Docker password and include a local development JWT secret. Override `AUTOOPSHUB_MYSQL_PASSWORD` and `AUTOOPSHUB_JWT_SECRET` for non-local deployments.
+The application default matches this local Docker MySQL password. `AUTOOPSHUB_JWT_SECRET` has no default when authentication is enabled, so deployments fail closed unless an explicit signing secret is provided.
 
 When `databases-init.sql` is applied, it seeds a default local admin account for first login:
 

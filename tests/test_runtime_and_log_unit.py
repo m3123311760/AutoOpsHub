@@ -83,14 +83,24 @@ def test_requirements_use_direct_bcrypt_without_passlib_adapter() -> None:
     assert "passlib" not in requirements
 
 
-def test_default_auth_settings_match_local_compose(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_default_auth_settings_match_local_compose_without_predictable_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AUTOOPSHUB_MYSQL_PASSWORD", raising=False)
     monkeypatch.delenv("AUTOOPSHUB_JWT_SECRET", raising=False)
 
     settings = load_settings()
 
     assert settings.mysql.password == "autoopshub"
-    assert settings.jwt.secret
+    assert settings.jwt.secret == ""
+
+
+def test_auth_service_requires_explicit_jwt_secret() -> None:
+    settings = AppSettings()
+    settings.jwt.secret = ""
+
+    svc = AuthService(settings)
+
+    with pytest.raises(Exception, match="AUTOOPSHUB_JWT_SECRET"):
+        svc._require_jwt_secret()
 
 
 def test_script_runtime_takes_precedence_over_shebang(monkeypatch: pytest.MonkeyPatch) -> None:

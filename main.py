@@ -766,7 +766,7 @@ def _startup_check_auth_schema() -> None:
     if not settings.require_auth:
         return
     if not settings.jwt.secret.strip():
-        return
+        raise RuntimeError("未配置 AUTOOPSHUB_JWT_SECRET，强制认证模式无法安全启动。")
     try:
         assert_auth_schema_present(settings)
     except Exception as exc:  # noqa: BLE001

@@ -80,7 +80,7 @@ class ADSettings:
 
 @dataclass
 class JWTSettings:
-    secret: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_JWT_SECRET", "autoopshub-local-dev-secret"))
+    secret: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_JWT_SECRET", ""))
     algorithm: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_JWT_ALGORITHM", "HS256"))
     expire_minutes: int = field(default_factory=lambda: _env_int("AUTOOPSHUB_JWT_EXPIRE_MINUTES", 60))
 

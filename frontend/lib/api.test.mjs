@@ -16,6 +16,7 @@ globalThis.fetch = async (url, options) => {
 };
 
 const { authApi, jobApi, runbookApi, taskApi, workpieceApi } = await import("./api.ts");
+const { safeLoginRedirectTarget } = await import("./auth-routes.ts");
 const { recentTasks, workpieceHref, workpieceRouteParam } = await import("./routes.ts");
 
 afterEach(() => {
@@ -134,6 +135,15 @@ test("login 401 responses stay on the login page for inline errors", async () =>
   await assert.rejects(() => authApi.login("local", "admin", "bad"), /认证失败/);
 
   assert.equal(globalThis.window.location.href, "");
+});
+
+test("login redirect target only allows local absolute paths", () => {
+  assert.equal(safeLoginRedirectTarget("/workpieces/team?tab=jobs"), "/workpieces/team?tab=jobs");
+  assert.equal(safeLoginRedirectTarget("javascript:alert(1)"), "/");
+  assert.equal(safeLoginRedirectTarget("https://evil.example/phish"), "/");
+  assert.equal(safeLoginRedirectTarget("//evil.example/phish"), "/");
+  assert.equal(safeLoginRedirectTarget("workpieces/team"), "/");
+  assert.equal(safeLoginRedirectTarget(null), "/");
 });
 
 test("workpiece route helper encodes only the workpiece path segment", () => {
