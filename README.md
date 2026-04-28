@@ -28,6 +28,13 @@ If authentication or MySQL-backed features are enabled, use the local Docker cre
 $env:AUTOOPSHUB_MYSQL_PASSWORD = "autoopshub"
 ```
 
+When `databases-init.sql` is applied, it seeds a default local admin account for first login:
+
+- Username: `admin`
+- Password: `ChangeMe123!`
+
+Replace this initial password hash in `auth_users` immediately after deployment.
+
 ## Frontend
 
 Run frontend commands from the `frontend/` directory:
