@@ -1,10 +1,18 @@
 "use client";
 
-import Link from "next/link";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Bell, LogOut, Search, User } from "lucide-react";
+import { Bell, ChevronDown, LogOut, Search, User } from "lucide-react";
 import { authApi } from "@/lib/api";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 
 interface HeaderProps {
@@ -14,6 +22,15 @@ interface HeaderProps {
 
 export function Header({ title, description }: HeaderProps) {
   const router = useRouter();
+  const [principalUsername, setPrincipalUsername] = useState("");
+
+  useEffect(() => {
+    setPrincipalUsername(
+      (typeof window !== "undefined" &&
+        localStorage.getItem("principal_username")?.trim()) ||
+        ""
+    );
+  }, []);
 
   async function handleLogout() {
     try {
@@ -56,15 +73,41 @@ export function Header({ title, description }: HeaderProps) {
           <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-primary" />
         </Button>
 
-        <Button variant="ghost" size="icon" asChild>
-          <Link href="/login" aria-label="登录">
-            <User className="h-4 w-4" />
-          </Link>
-        </Button>
-
-        <Button variant="ghost" size="icon" onClick={handleLogout} aria-label="退出登录">
-          <LogOut className="h-4 w-4" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              className="h-9 max-w-[200px] gap-1.5 px-2"
+              aria-label="账号菜单"
+            >
+              <User className="h-4 w-4 shrink-0" />
+              <span className="truncate text-sm font-medium">
+                {principalUsername || "账号"}
+              </span>
+              <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            <DropdownMenuLabel className="font-normal">
+              <div className="flex flex-col gap-1">
+                <p className="truncate text-sm font-medium leading-none">
+                  {principalUsername || "当前用户"}
+                </p>
+                <p className="text-xs text-muted-foreground">已登录</p>
+              </div>
+            </DropdownMenuLabel>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              className="cursor-pointer"
+              onSelect={() => {
+                void handleLogout();
+              }}
+            >
+              <LogOut className="h-4 w-4" />
+              退出登录
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );
