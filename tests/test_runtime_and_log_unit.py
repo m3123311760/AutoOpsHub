@@ -1,7 +1,9 @@
 """轻量单元测试：日志后端选择、manifest 循环引用、DDL 脚本静态检查。"""
 
+import re
 from pathlib import Path
 
+import bcrypt
 import pytest
 
 from autoopshub import auth_service
@@ -49,6 +51,56 @@ def test_databases_init_sql_contains_required_tables() -> None:
     sql = (root / "databases-init.sql").read_text(encoding="utf-8")
     for name in ("auth_users", "auth_jwt_sessions", "auth_api_keys"):
         assert f"CREATE TABLE IF NOT EXISTS {name}" in sql
+
+
+def test_databases_init_sql_seeds_default_local_admin_without_plaintext_password() -> None:
+    root = Path(__file__).resolve().parents[1]
+    sql = (root / "databases-init.sql").read_text(encoding="utf-8")
+
+    assert "INSERT INTO auth_users (username, password_hash)" in sql
+    match = re.search(r"VALUES \('admin', '([^']+)'\)", sql)
+    assert match is not None
+    assert match.group(1).startswith("$2")
+    assert bcrypt.checkpw(b"ChangeMe123!", match.group(1).encode("utf-8"))
+    assert "ON DUPLICATE KEY UPDATE id = id" in sql
+    assert "ChangeMe123!" not in sql
+
+
+def test_auth_password_context_verifies_seeded_admin_password() -> None:
+    root = Path(__file__).resolve().parents[1]
+    sql = (root / "databases-init.sql").read_text(encoding="utf-8")
+    match = re.search(r"VALUES \('admin', '([^']+)'\)", sql)
+    assert match is not None
+
+    assert auth_service.pwd_context.verify("ChangeMe123!", match.group(1))
+
+
+def test_requirements_use_direct_bcrypt_without_passlib_adapter() -> None:
+    root = Path(__file__).resolve().parents[1]
+    requirements = (root / "requirements.txt").read_text(encoding="utf-8")
+
+    assert "bcrypt>=4.0,<6" in requirements
+    assert "passlib" not in requirements
+
+
+def test_default_auth_settings_match_local_compose_without_predictable_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AUTOOPSHUB_MYSQL_PASSWORD", raising=False)
+    monkeypatch.delenv("AUTOOPSHUB_JWT_SECRET", raising=False)
+
+    settings = load_settings()
+
+    assert settings.mysql.password == "autoopshub"
+    assert settings.jwt.secret == ""
+
+
+def test_auth_service_requires_explicit_jwt_secret() -> None:
+    settings = AppSettings()
+    settings.jwt.secret = ""
+
+    svc = AuthService(settings)
+
+    with pytest.raises(Exception, match="AUTOOPSHUB_JWT_SECRET"):
+        svc._require_jwt_secret()
 
 
 def test_script_runtime_takes_precedence_over_shebang(monkeypatch: pytest.MonkeyPatch) -> None:

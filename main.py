@@ -13,6 +13,7 @@ from uuid import uuid4
 import yaml
 from croniter import croniter
 from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from jinja2 import Environment, meta
 from jinja2 import Template
@@ -387,6 +388,12 @@ def _load_manifest(workpiece_name: str, runbook_name: str) -> list[ManifestVaria
     return [ManifestVariable.model_validate(item) for item in payload.get("items", [])]
 
 
+def _runbook_payload(workpiece_name: str, runbook: RunbookRecord) -> dict[str, Any]:
+    payload = runbook.model_dump()
+    payload["manifest_summary"] = {"variables": len(_load_manifest(workpiece_name, runbook.name))}
+    return payload
+
+
 def _save_task(workpiece_name: str, task: TaskRecord) -> None:
     _write_json(_task_path(workpiece_name, task.task_id), task.model_dump())
 
@@ -697,6 +704,23 @@ settings = load_settings()
 log_mgr = LogBackendManager(settings)
 auth_svc = AuthService(settings)
 
+cors_origins = [
+    origin.strip()
+    for origin in os.getenv(
+        "AUTOOPSHUB_CORS_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000",
+    ).split(",")
+    if origin.strip()
+]
+
+def _assert_auth_schema_ready() -> None:
+    try:
+        assert_auth_schema_present(settings)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail=f"认证数据库不可用: {exc}") from exc
+
 
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -728,12 +752,21 @@ async def _auth_middleware(request: Request, call_next):  # type: ignore[no-unty
     return JSONResponse(status_code=401, content={"detail": "未认证"})
 
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
 @app.on_event("startup")
 def _startup_check_auth_schema() -> None:
     if not settings.require_auth:
         return
     if not settings.jwt.secret.strip():
-        return
+        raise RuntimeError("未配置 AUTOOPSHUB_JWT_SECRET，强制认证模式无法安全启动。")
     assert_auth_schema_present(settings)
 
 
@@ -759,9 +792,14 @@ async def logging_health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/health/auth")
+async def auth_health() -> dict[str, bool]:
+    return {"require_auth": settings.require_auth}
+
+
 @app.post("/api/auth/login")
 async def auth_login(body: AuthLoginRequest) -> dict[str, Any]:
-    assert_auth_schema_present(settings)
+    _assert_auth_schema_ready()
     return auth_svc.login(body.mode, body.username, body.password)
 
 
@@ -776,13 +814,13 @@ async def auth_jwt_revoke(authorization: str | None = Header(None)) -> Response:
 
 @app.post("/api/auth/api-keys", status_code=201)
 async def auth_create_api_key(body: ApiKeyCreateRequest) -> dict[str, Any]:
-    assert_auth_schema_present(settings)
+    _assert_auth_schema_ready()
     return auth_svc.create_api_key(body.name or "default")
 
 
 @app.get("/api/auth/api-keys")
 async def auth_list_api_keys() -> dict[str, list[dict[str, Any]]]:
-    assert_auth_schema_present(settings)
+    _assert_auth_schema_ready()
     rows = auth_svc.list_api_keys()
     items: list[dict[str, Any]] = []
     for row in rows:
@@ -802,7 +840,7 @@ async def auth_list_api_keys() -> dict[str, list[dict[str, Any]]]:
 
 @app.delete("/api/auth/api-keys/{key_id}", status_code=204)
 async def auth_revoke_api_key(key_id: str) -> Response:
-    assert_auth_schema_present(settings)
+    _assert_auth_schema_ready()
     auth_svc.revoke_api_key(key_id)
     return Response(status_code=204)
 
@@ -945,13 +983,14 @@ async def upsert_runbook(workpiece_name: str, runbook_name: str, body: RunbookUp
     template_vars = _combined_template_var_names(body.content)
     merged_manifest = _normalize_manifest(template_vars, body.manifest)
     _save_manifest(workpiece_name, runbook_name, merged_manifest)
-    return {
-        "name": runbook.name,
-        "type": runbook.type.value,
-        "description": runbook.description,
-        "created_at": runbook.created_at,
-        "updated_at": runbook.updated_at,
-    }
+    return _runbook_payload(workpiece_name, runbook)
+
+
+@app.get("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}")
+async def get_runbook(workpiece_name: str, runbook_name: str) -> dict[str, Any]:
+    _load_meta(workpiece_name)
+    runbook = _load_runbook(workpiece_name, runbook_name)
+    return _runbook_payload(workpiece_name, runbook)
 
 
 @app.delete("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}", status_code=204)
@@ -1207,7 +1246,7 @@ async def update_job(workpiece_name: str, job_name: str, body: JobUpsertRequest)
         description=body.description,
         cron=body.cron,
         runbook_name=runbook_name,
-        variables=body.variables,
+        variables=body.variables if "variables" in body.model_fields_set else current.variables,
         enabled=body.enabled,
         next_run_at=_next_run_at(body.cron) if body.enabled else None,
         created_at=current.created_at,

@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 TEST_HOME = Path(__file__).parent / ".tmp-home-tests"
 TEST_HOME.mkdir(parents=True, exist_ok=True)
 os.environ["AUTOOPSHUB_HOME"] = str(TEST_HOME)
+os.environ["AUTOOPSHUB_REQUIRE_AUTH"] = "false"
 
 from main import app
 
@@ -76,6 +77,27 @@ def test_job_trigger_creates_job_task():
     task = trigger.json()["task"]
     assert task["source"] == "job"
     assert task["runbook_name"] == "job-rb"
+
+
+def test_job_update_without_variables_preserves_existing_variables():
+    client.delete("/api/workpieces/job-wp/jobs/preserve-vars")
+    create = client.post(
+        "/api/workpieces/job-wp/jobs/preserve-vars",
+        json={
+            "cron": "* * * * *",
+            "runbook_name": "job-rb",
+            "variables": {"name": "from-job"},
+        },
+    )
+    assert create.status_code == 201
+
+    update = client.put(
+        "/api/workpieces/job-wp/jobs/preserve-vars",
+        json={"cron": "*/10 * * * *", "enabled": False},
+    )
+
+    assert update.status_code == 200
+    assert update.json()["variables"] == {"name": "from-job"}
 
 
 def test_job_trigger_with_unknown_variables_stays_pending():

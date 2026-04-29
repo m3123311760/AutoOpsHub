@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 TEST_HOME = Path(__file__).parent / ".tmp-home-tests"
 TEST_HOME.mkdir(parents=True, exist_ok=True)
 os.environ["AUTOOPSHUB_HOME"] = str(TEST_HOME)
+os.environ["AUTOOPSHUB_REQUIRE_AUTH"] = "false"
 
 from main import app
 

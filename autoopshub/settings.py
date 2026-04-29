@@ -52,7 +52,7 @@ class MySQLSettings:
     host: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _env_int("AUTOOPSHUB_MYSQL_PORT", 3306))
     user: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_USER", "autoopshub"))
-    password: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_PASSWORD", ""))
+    password: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_PASSWORD", "autoopshub"))
     database: str = field(default_factory=lambda: os.getenv("AUTOOPSHUB_MYSQL_DATABASE", "autoopshub"))
 
 
@@ -106,7 +106,7 @@ class AppSettings:
     ad: ADSettings = field(default_factory=ADSettings)
     jwt: JWTSettings = field(default_factory=JWTSettings)
     api_key: APIKeySettings = field(default_factory=APIKeySettings)
-    require_auth: bool = field(default_factory=lambda: _env_bool("AUTOOPSHUB_REQUIRE_AUTH", False))
+    require_auth: bool = field(default_factory=lambda: _env_bool("AUTOOPSHUB_REQUIRE_AUTH", True))
 
     def public_dict(self) -> dict[str, Any]:
         """用于调试端点，避免泄露密钥。"""
