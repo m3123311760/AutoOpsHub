@@ -128,7 +128,7 @@ export const taskApi = {
 // Job APIs
 export const jobApi = {
   list: (workpiece: string) =>
-    fetcher<{ items: Job[] }>(`/api/workpieces/${pathSegment(workpiece)}/jobs`),
+    fetcher<{ items: JobSummary[] }>(`/api/workpieces/${pathSegment(workpiece)}/jobs`),
   get: (workpiece: string, name: string) =>
     fetcher<Job>(`/api/workpieces/${pathSegment(workpiece)}/jobs/${pathSegment(name)}`),
   upsert: (workpiece: string, name: string, data: JobUpsertRequest) =>
@@ -262,14 +262,17 @@ export interface TriggerResponse {
   missing_required: string[];
 }
 
-export interface Job {
+export interface JobSummary {
   job_name: string;
   description: string;
   cron: string;
   runbook_name: string;
-  variables: Record<string, unknown>;
   enabled: boolean;
   next_run_at?: string;
+}
+
+export interface Job extends JobSummary {
+  variables: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }

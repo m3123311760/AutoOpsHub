@@ -35,7 +35,7 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { EmptyState } from "@/components/empty-state";
-import { jobApi, runbookApi, type Job, type JobUpsertRequest, type RunbookSummary } from "@/lib/api";
+import { jobApi, runbookApi, type JobSummary, type JobUpsertRequest, type RunbookSummary } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 
 interface JobsContentProps {
@@ -115,7 +115,7 @@ export function JobsContent({ workpiece }: JobsContentProps) {
     }
   };
 
-  const toggleEnabled = async (job: Job) => {
+  const toggleEnabled = async (job: JobSummary) => {
     try {
       const current = await jobApi.get(workpiece, job.job_name);
       await jobApi.update(workpiece, job.job_name, {
@@ -280,7 +280,7 @@ export function JobsContent({ workpiece }: JobsContentProps) {
         />
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
-          {jobs.map((job: Job) => (
+          {jobs.map((job: JobSummary) => (
             <Card
               key={job.job_name}
               className={`transition-colors ${
