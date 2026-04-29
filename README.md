@@ -16,6 +16,8 @@ pip install -r requirements.txt
 docker compose -f docker-compose.yml up -d
 ```
 
+Use `.env.example` as the reference list for supported environment variables. The application reads variables from the process environment.
+
 Start the FastAPI application with Uvicorn:
 
 ```powershell
