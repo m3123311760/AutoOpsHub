@@ -147,6 +147,7 @@ export const jobApi = {
 
 // Auth APIs
 export const authApi = {
+  getAuthStatus: () => fetcher<AuthStatus>("/api/health/auth"),
   login: (mode: "local" | "ldap" | "ad", username: string, password: string) =>
     fetcher<AuthLoginResponse>("/api/auth/login", {
       method: "POST",
@@ -298,6 +299,10 @@ export interface AuthLoginResponse {
     username: string;
     auth_mode: "local" | "ldap" | "ad";
   };
+}
+
+export interface AuthStatus {
+  require_auth: boolean;
 }
 
 export interface ApiKeyRecord {

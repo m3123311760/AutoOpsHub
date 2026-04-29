@@ -9,6 +9,7 @@ const AUTH_STORAGE_KEYS = ["token", "token_expires_at", "principal_username", "a
 interface AuthContextType {
   isAuthenticated: boolean;
   isLoading: boolean;
+  requireAuth: boolean;
   logout: () => Promise<void>;
   checkAuth: () => boolean;
 }
@@ -32,6 +33,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const pathname = usePathname();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
+  const [requireAuth, setRequireAuth] = useState(true);
 
   const checkAuth = useCallback(() => {
     const token = localStorage.getItem("token");
@@ -69,19 +71,36 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }, [router]);
 
   useEffect(() => {
-    const authenticated = checkAuth();
-    setIsAuthenticated(authenticated);
-    setIsLoading(false);
+    let canceled = false;
 
-    // Redirect to login if not authenticated and not on login page
-    if (!authenticated && pathname !== "/login") {
-      router.push(`/login?next=${encodeURIComponent(pathname)}`);
+    async function syncAuth() {
+      let authRequired = true;
+      try {
+        authRequired = (await authApi.getAuthStatus()).require_auth;
+      } catch {
+        authRequired = true;
+      }
+      if (canceled) return;
+
+      const authenticated = !authRequired || checkAuth();
+      setRequireAuth(authRequired);
+      setIsAuthenticated(authenticated);
+      setIsLoading(false);
+
+      if (authRequired && !authenticated && pathname !== "/login") {
+        router.push(`/login?next=${encodeURIComponent(pathname)}`);
+      }
+
+      if (authRequired && authenticated && pathname === "/login") {
+        router.push("/");
+      }
     }
 
-    // Redirect to home if authenticated and on login page
-    if (authenticated && pathname === "/login") {
-      router.push("/");
-    }
+    void syncAuth();
+
+    return () => {
+      canceled = true;
+    };
   }, [checkAuth, pathname, router]);
 
   // Don't render children until auth check is complete
@@ -94,7 +113,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   }
 
   return (
-    <AuthContext.Provider value={{ isAuthenticated, isLoading, logout, checkAuth }}>
+    <AuthContext.Provider value={{ isAuthenticated, isLoading, requireAuth, logout, checkAuth }}>
       {children}
     </AuthContext.Provider>
   );

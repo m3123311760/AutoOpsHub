@@ -767,10 +767,7 @@ def _startup_check_auth_schema() -> None:
         return
     if not settings.jwt.secret.strip():
         raise RuntimeError("未配置 AUTOOPSHUB_JWT_SECRET，强制认证模式无法安全启动。")
-    try:
-        assert_auth_schema_present(settings)
-    except Exception as exc:  # noqa: BLE001
-        print(f"认证数据库启动检查失败: {exc}")
+    assert_auth_schema_present(settings)
 
 
 @app.get("/")
@@ -793,6 +790,11 @@ async def logging_health() -> dict[str, Any]:
         "degrade_reason": st.degrade_reason,
         "non_persistent_note": "内存日志后端不保证跨进程或重启后保留",
     }
+
+
+@app.get("/api/health/auth")
+async def auth_health() -> dict[str, bool]:
+    return {"require_auth": settings.require_auth}
 
 
 @app.post("/api/auth/login")

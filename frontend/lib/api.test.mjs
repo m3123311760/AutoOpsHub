@@ -58,27 +58,30 @@ test("fetcher only sends JSON content type when a body is present", async () => 
 });
 
 test("auth API clients cover login and API key management", async () => {
+  await authApi.getAuthStatus();
   await authApi.login("local", "admin", "secret");
   await authApi.listApiKeys();
   await authApi.createApiKey("ci");
   await authApi.revokeApiKey("key#1?");
 
-  assert.equal(captured[0].url, "http://localhost:8000/api/auth/login");
-  assert.equal(captured[0].options.method, "POST");
-  assert.deepEqual(JSON.parse(captured[0].options.body), {
+  assert.equal(captured[0].url, "http://localhost:8000/api/health/auth");
+  assert.equal(captured[0].options?.method, undefined);
+  assert.equal(captured[1].url, "http://localhost:8000/api/auth/login");
+  assert.equal(captured[1].options.method, "POST");
+  assert.deepEqual(JSON.parse(captured[1].options.body), {
     mode: "local",
     username: "admin",
     password: "secret",
   });
-  assert.equal(captured[1].url, "http://localhost:8000/api/auth/api-keys");
-  assert.equal(captured[1].options?.method, undefined);
   assert.equal(captured[2].url, "http://localhost:8000/api/auth/api-keys");
-  assert.equal(captured[2].options.method, "POST");
+  assert.equal(captured[2].options?.method, undefined);
+  assert.equal(captured[3].url, "http://localhost:8000/api/auth/api-keys");
+  assert.equal(captured[3].options.method, "POST");
   assert.equal(
-    captured[3].url,
+    captured[4].url,
     "http://localhost:8000/api/auth/api-keys/key%231%3F"
   );
-  assert.equal(captured[3].options.method, "DELETE");
+  assert.equal(captured[4].options.method, "DELETE");
 });
 
 test("fetcher redirects protected 401 responses to login with a return path", async () => {
