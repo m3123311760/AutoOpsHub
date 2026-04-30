@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from jinja2 import Environment, meta
 from jinja2 import Template
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from autoopshub.auth_service import AuthService
 from autoopshub.db_schema import assert_auth_schema_present
@@ -266,9 +266,7 @@ def _drop_first_line(text: str) -> str:
     return "".join(lines[1:]) if lines else text
 
 
-def _validate_runbook_manifest_on_create(content: str, manifest: list[ManifestVariable] | None) -> None:
-    if template_assigns_system_var(content):
-        raise HTTPException(status_code=422, detail="禁止在模板中使用 {% set system.* %} 为系统保留变量赋值")
+def _validate_manifest_on_create(manifest: list[ManifestVariable] | None) -> None:
     names = [m.name for m in (manifest or [])]
     dups = detect_duplicate_names(names)
     if dups:
@@ -276,6 +274,12 @@ def _validate_runbook_manifest_on_create(content: str, manifest: list[ManifestVa
     for item in manifest or []:
         if item.name in SYSTEM_RESERVED_NAMES:
             raise HTTPException(status_code=422, detail="禁止在创建 runbook 的 manifest 中提前声明系统保留变量")
+
+
+def _validate_runbook_manifest_on_create(content: str, manifest: list[ManifestVariable] | None) -> None:
+    if template_assigns_system_var(content):
+        raise HTTPException(status_code=422, detail="禁止在模板中使用 {% set system.* %} 为系统保留变量赋值")
+    _validate_manifest_on_create(manifest)
 
 
 def _validate_task_variables_against_readonly(manifest: list[ManifestVariable], variables: dict[str, Any]) -> None:
@@ -565,6 +569,25 @@ def _render_text_files_in_place(root: Path, variables: dict[str, Any]) -> None:
         path.write_text(Template(text).render(**_jinja_render_context(variables)), encoding="utf-8")
 
 
+TERRAFORM_RERUN_STATE_ARTIFACTS = {
+    ".terraform",
+    ".terraform.lock.hcl",
+    "terraform.tfstate",
+    "terraform.tfstate.backup",
+    "terraform.tfstate.d",
+}
+
+
+def _prune_inherited_runtime_for_file_package(runtime_dir: Path) -> None:
+    for child in runtime_dir.iterdir():
+        if child.name in TERRAFORM_RERUN_STATE_ARTIFACTS:
+            continue
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
 async def _uploaded_package_files(request: Request) -> tuple[dict[str, str], list[tuple[str, bytes]]]:
     try:
         form = await request.form()
@@ -802,12 +825,16 @@ def _execute_task(workpiece_name: str, task: TaskRecord) -> TaskRecord:
             shutil.rmtree(runtime_dir)
         runtime_dir.mkdir(parents=True, exist_ok=True)
         inherited_runtime_dir = _task_inherited_runtime_dir(task)
+        inherited_runtime_copied = False
         if inherited_runtime_dir and inherited_runtime_dir.exists() and inherited_runtime_dir.resolve() != runtime_dir.resolve():
             shutil.copytree(inherited_runtime_dir, runtime_dir, dirs_exist_ok=True)
+            inherited_runtime_copied = True
         if runbook.content_mode == "files":
             package_dir = _runbook_files_dir(workpiece_name, runbook.name)
             if not package_dir.exists():
                 raise ValueError("runbook 文件包不存在")
+            if inherited_runtime_copied:
+                _prune_inherited_runtime_for_file_package(runtime_dir)
             shutil.copytree(package_dir, runtime_dir, dirs_exist_ok=True)
             entry = runbook.entry_file or "main.tf"
             rendered_path = _ensure_path_inside(runtime_dir, entry)
@@ -1296,6 +1323,7 @@ async def _upsert_file_package_runbook(workpiece_name: str, runbook_name: str, r
     if runbook_type != RunbookType.TERRAFORM:
         raise HTTPException(status_code=422, detail="文件包 runbook 初期仅支持 Terraform 类型")
     manifest = _parse_manifest_field(fields.get("manifest"))
+    _validate_manifest_on_create(manifest)
     description = fields.get("description", "")
     runtime = fields.get("runtime") or None
     entry_file = _select_entry_file(files, fields.get("entry_file"))
@@ -1328,7 +1356,16 @@ async def upsert_runbook(workpiece_name: str, runbook_name: str, request: Reques
     content_type = request.headers.get("content-type", "").lower()
     if content_type.startswith("multipart/form-data") or content_type.startswith("application/x-www-form-urlencoded"):
         return await _upsert_file_package_runbook(workpiece_name, runbook_name, request)
-    body = RunbookUpsertRequest.model_validate(await request.json())
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid JSON body: {exc.msg}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid JSON body: {exc}") from exc
+    try:
+        body = RunbookUpsertRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
     return _upsert_inline_runbook(workpiece_name, runbook_name, body)
 
 

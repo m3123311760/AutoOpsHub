@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 
@@ -137,6 +138,18 @@ def test_script_runtime_and_workflow_validations():
         },
     )
     assert unknown_manifest.status_code == 422
+
+
+def test_inline_runbook_malformed_json_returns_client_error():
+    error_client = TestClient(app, raise_server_exceptions=False)
+    response = error_client.post(
+        "/api/workpieces/demo/runbooks/bad-json",
+        content='{"type": "Script", "content": ',
+        headers={"content-type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert "json" in response.json()["detail"].lower()
 
 
 def test_runbook_manifest_auto_declares_all_system_reserved_variables():
@@ -460,6 +473,54 @@ def test_rerun_terraform_file_package_inherits_previous_runtime_state(monkeypatc
     assert (runtime_dirs[1] / ".terraform" / "providers.lock").read_text(encoding="utf-8") == "provider cache"
 
 
+def test_rerun_terraform_file_package_drops_files_removed_from_updated_runbook(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/rerun-terraform-prune")
+    create_wp = client.post("/api/workpieces/rerun-terraform-prune", json={"description": "tf rerun prune"})
+    assert create_wp.status_code in (201, 409)
+    create = client.post(
+        "/api/workpieces/rerun-terraform-prune/runbooks/tf",
+        data={"type": "Terraform", "entry_file": "main.tf"},
+        files=[
+            ("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain")),
+            ("files", ("old.tf", b"resource \"null_resource\" \"stale\" {}\n", "text/plain")),
+        ],
+    )
+    assert create.status_code == 201
+
+    runtime_dirs: list[Path] = []
+
+    def fake_dispatch_execution(*args, **kwargs):
+        runtime_dir = Path(args[2])
+        runtime_dirs.append(runtime_dir)
+        if len(runtime_dirs) == 1:
+            (runtime_dir / "terraform.tfstate").write_text('{"resources":[]}', encoding="utf-8")
+        return ExecResult(exit_code=0, error_summary="", command=str(args[6].get("system.set_runtime", "")).split())
+
+    monkeypatch.setattr(main, "dispatch_execution", fake_dispatch_execution)
+    original = client.post(
+        "/api/workpieces/rerun-terraform-prune/runbooks/tf/trigger",
+        json={"variables": {"name": "demo", "system.set_runtime": "terraform apply -auto-approve"}},
+    )
+    assert original.status_code == 201
+
+    update = client.post(
+        "/api/workpieces/rerun-terraform-prune/runbooks/tf",
+        data={"type": "Terraform", "entry_file": "main.tf"},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+    assert update.status_code == 201
+
+    rerun = client.post(
+        f"/api/tasks/{original.json()['task']['task_id']}/rerun",
+        json={"variables": {"system.set_runtime": "terraform destroy -auto-approve"}},
+    )
+
+    assert rerun.status_code == 201
+    assert len(runtime_dirs) == 2
+    assert not (runtime_dirs[1] / "old.tf").exists()
+    assert (runtime_dirs[1] / "terraform.tfstate").read_text(encoding="utf-8") == '{"resources":[]}'
+
+
 def test_system_set_runtime_default_renders_runtime_paths_into_schedule(monkeypatch: pytest.MonkeyPatch):
     client.delete("/api/workpieces/runtime-command")
     create_wp = client.post("/api/workpieces/runtime-command", json={"description": "runtime"})
@@ -604,6 +665,29 @@ def test_multipart_runbook_rejects_invalid_type_with_client_error():
 
     assert create.status_code == 422
     assert "type" in create.json()["detail"]
+
+
+def test_multipart_runbook_rejects_duplicate_manifest_variables():
+    client.delete("/api/workpieces/file-duplicate-manifest")
+    create_wp = client.post("/api/workpieces/file-duplicate-manifest", json={"description": "files"})
+    assert create_wp.status_code in (201, 409)
+
+    create = client.post(
+        "/api/workpieces/file-duplicate-manifest/runbooks/tf-package",
+        data={
+            "type": "Terraform",
+            "manifest": json.dumps(
+                [
+                    {"name": "name", "direction": "input", "required": False},
+                    {"name": "name", "direction": "input", "required": True},
+                ]
+            ),
+        },
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+
+    assert create.status_code == 422
+    assert "重复声明" in create.json()["detail"]
 
 
 def test_multipart_runbook_returns_clear_error_when_parser_dependency_is_missing(monkeypatch: pytest.MonkeyPatch):
