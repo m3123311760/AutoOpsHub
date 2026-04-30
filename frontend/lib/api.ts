@@ -24,8 +24,9 @@ function redirectToLogin() {
 
 async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
   const token = browserStorage()?.getItem("token") || null;
+  const isFormData = typeof FormData !== "undefined" && options?.body instanceof FormData;
   const headers: HeadersInit = {
-    ...(options?.body ? { "Content-Type": "application/json" } : {}),
+    ...(options?.body && !isFormData ? { "Content-Type": "application/json" } : {}),
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
     ...options?.headers,
   };
@@ -87,6 +88,23 @@ export const runbookApi = {
       method: "POST",
       body: JSON.stringify(data),
     }),
+  upsertFiles: (workpiece: string, name: string, data: RunbookFilePackageUpsertRequest) => {
+    const form = new FormData();
+    form.set("type", data.type);
+    if (data.description) form.set("description", data.description);
+    if (data.runtime) form.set("runtime", data.runtime);
+    if (data.entry_file) form.set("entry_file", data.entry_file);
+    if (data.manifest) form.set("manifest", JSON.stringify(data.manifest));
+    for (const file of data.files) {
+      const relativePath = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+      form.append("files", file, relativePath);
+    }
+    return fetcher<Runbook>(`/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}`, {
+      method: "POST",
+      body: form,
+      headers: {},
+    });
+  },
   delete: (workpiece: string, name: string) =>
     fetcher<null>(`/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}`, {
       method: "DELETE",
@@ -94,6 +112,14 @@ export const runbookApi = {
   getManifest: (workpiece: string, name: string) =>
     fetcher<{ items: ManifestVariable[] }>(
       `/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}/manifest`
+    ),
+  upsertManifest: (workpiece: string, name: string, manifest: ManifestVariable[]) =>
+    fetcher<{ items: ManifestVariable[] }>(
+      `/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}/manifest`,
+      {
+        method: "POST",
+        body: JSON.stringify({ manifest }),
+      }
     ),
   trigger: (workpiece: string, name: string, variables: Record<string, unknown>) =>
     fetcher<TriggerResponse>(`/api/workpieces/${pathSegment(workpiece)}/runbooks/${pathSegment(name)}/trigger`, {
@@ -121,8 +147,20 @@ export const taskApi = {
     fetcher<Task>(`/api/workpieces/${pathSegment(workpiece)}/tasks/${pathSegment(taskId)}/cancel`, {
       method: "POST",
     }),
-  getLogs: (workpiece: string, taskId: string) =>
-    fetcher<{ items: LogRecord[] }>(`/api/workpieces/${pathSegment(workpiece)}/tasks/${pathSegment(taskId)}/logs`),
+  rerun: (taskId: string, variables?: Record<string, unknown>) =>
+    fetcher<TriggerResponse>(`/api/tasks/${pathSegment(taskId)}/rerun`, {
+      method: "POST",
+      ...(variables ? { body: JSON.stringify({ variables }) } : {}),
+    }),
+  getLogs: (workpiece: string, taskId: string, options?: { after?: number; limit?: number }) => {
+    const params = new URLSearchParams();
+    if (options?.after !== undefined) params.set("after", String(options.after));
+    if (options?.limit !== undefined) params.set("limit", String(options.limit));
+    const query = params.toString();
+    return fetcher<{ items: LogRecord[] }>(
+      `/api/workpieces/${pathSegment(workpiece)}/tasks/${pathSegment(taskId)}/logs${query ? `?${query}` : ""}`
+    );
+  },
 };
 
 // Job APIs
@@ -207,6 +245,9 @@ export interface RunbookSummary {
   name: string;
   type: "Terraform" | "Ansible" | "Script" | "Workflow";
   description: string;
+  content_mode?: "inline" | "files";
+  entry_file?: string | null;
+  files_summary?: RunbookFilesSummary;
   created_at: string;
   updated_at: string;
   manifest_summary: {
@@ -219,12 +260,27 @@ export interface Runbook extends RunbookSummary {
   runtime?: string;
 }
 
+export interface RunbookFilesSummary {
+  count: number;
+  total_bytes: number;
+  paths: string[];
+}
+
 export interface RunbookUpsertRequest {
   type: "Terraform" | "Ansible" | "Script" | "Workflow";
   description?: string;
   content: string;
   runtime?: string;
   manifest?: ManifestVariable[];
+}
+
+export interface RunbookFilePackageUpsertRequest {
+  type: "Terraform";
+  description?: string;
+  runtime?: string;
+  entry_file?: string;
+  manifest?: ManifestVariable[];
+  files: File[];
 }
 
 export interface ManifestVariable {

@@ -100,7 +100,8 @@ def test_task_list_detail_update_confirm_cancel():
 
     confirm = client.post(f"/api/workpieces/tasks-wp/tasks/{task_id}/confirm")
     assert confirm.status_code == 202
-    assert confirm.json()["task"]["status"] in ("running", "success")
+    confirmed = client.get(f"/api/workpieces/tasks-wp/tasks/{task_id}").json()
+    assert confirmed["status"] in ("running", "success")
 
     reject_update_after_confirm = client.put(
         f"/api/workpieces/tasks-wp/tasks/{task_id}/variables",

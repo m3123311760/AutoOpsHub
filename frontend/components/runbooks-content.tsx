@@ -6,12 +6,14 @@ import {
   BookOpen,
   Plus,
   Play,
+  Settings2,
   Trash2,
   Code,
   FileCode,
   Terminal,
   GitBranch,
   Loader2,
+  Upload,
   XCircle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -38,7 +40,9 @@ import {
 } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/empty-state";
-import { runbookApi, type RunbookSummary, type RunbookUpsertRequest } from "@/lib/api";
+import { TaskLogDialog } from "@/components/task-log-viewer";
+import { TaskParameterDialog } from "@/components/task-parameter-dialog";
+import { runbookApi, type ManifestVariable, type RunbookSummary, type RunbookUpsertRequest, type Task } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 
 interface RunbooksContentProps {
@@ -59,6 +63,8 @@ const typeColors = {
   Workflow: "bg-green-500/10 text-green-500",
 };
 
+const readonlySystemVariables = new Set(["system.output", "system.runbook_file", "system.runbook_path"]);
+
 export function RunbooksContent({ workpiece }: RunbooksContentProps) {
   const { data, error, isLoading } = useSWR(
     `runbooks-${workpiece}`,
@@ -67,31 +73,80 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
 
   const [createOpen, setCreateOpen] = useState(false);
   const [triggerOpen, setTriggerOpen] = useState(false);
+  const [manifestOpen, setManifestOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
+  const [logTask, setLogTask] = useState<Task | null>(null);
   const [selectedRunbook, setSelectedRunbook] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [manifestItems, setManifestItems] = useState<ManifestVariable[]>([]);
+  const [manifestDraft, setManifestDraft] = useState<ManifestVariable[]>([]);
   const [formData, setFormData] = useState<RunbookUpsertRequest>({
     type: "Script",
     description: "",
     content: "",
     runtime: "bash",
   });
+  const [contentMode, setContentMode] = useState<"inline" | "files">("inline");
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  const [entryFile, setEntryFile] = useState("");
   const [newName, setNewName] = useState("");
-  const [triggerVariables, setTriggerVariables] = useState("{}");
+  const [triggerError, setTriggerError] = useState("");
 
   const runbooks = data?.items || [];
 
+  const openTriggerDialog = async (runbookName: string) => {
+    setSelectedRunbook(runbookName);
+    setTriggerOpen(true);
+    setManifestItems([]);
+    setTriggerError("");
+    try {
+      const manifest = await runbookApi.getManifest(workpiece, runbookName);
+      setManifestItems(manifest.items);
+    } catch (err) {
+      console.error("加载 manifest 失败:", err);
+      setTriggerError(err instanceof Error ? err.message : "加载 manifest 失败");
+    }
+  };
+
+  const openManifestDialog = async (runbookName: string) => {
+    setSelectedRunbook(runbookName);
+    setManifestOpen(true);
+    setManifestDraft([]);
+    try {
+      const manifest = await runbookApi.getManifest(workpiece, runbookName);
+      setManifestDraft(manifest.items);
+    } catch (err) {
+      console.error("加载 manifest 失败:", err);
+    }
+  };
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newName.trim() || !formData.content.trim()) return;
+    if (!newName.trim()) return;
+    if (contentMode === "files" && uploadFiles.length === 0) return;
+    if (contentMode === "inline" && !formData.content.trim()) return;
 
     setIsSubmitting(true);
     try {
-      await runbookApi.upsert(workpiece, newName.trim(), formData);
+      if (contentMode === "files" && formData.type === "Terraform") {
+        await runbookApi.upsertFiles(workpiece, newName.trim(), {
+          type: "Terraform",
+          description: formData.description,
+          runtime: formData.runtime,
+          entry_file: entryFile || undefined,
+          files: uploadFiles,
+        });
+      } else {
+        await runbookApi.upsert(workpiece, newName.trim(), formData);
+      }
       mutate(`runbooks-${workpiece}`);
       setCreateOpen(false);
       setNewName("");
       setFormData({ type: "Script", description: "", content: "", runtime: "bash" });
+      setContentMode("inline");
+      setUploadFiles([]);
+      setEntryFile("");
     } catch (err) {
       console.error("创建失败:", err);
     } finally {
@@ -99,20 +154,45 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
     }
   };
 
-  const handleTrigger = async () => {
+  const handleTrigger = async (variables: Record<string, unknown>) => {
+    if (!selectedRunbook) return;
+
+    setIsSubmitting(true);
+    setTriggerError("");
+    setLogTask(null);
+    setLogOpen(true);
+    try {
+      const response = await runbookApi.trigger(workpiece, selectedRunbook, variables);
+      setTriggerOpen(false);
+      setLogTask(response.task);
+      mutate(`tasks-${workpiece}`);
+    } catch (err) {
+      console.error("触发失败:", err);
+      setTriggerError(err instanceof Error ? err.message : "触发失败");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleManifestSave = async () => {
     if (!selectedRunbook) return;
 
     setIsSubmitting(true);
     try {
-      const variables = JSON.parse(triggerVariables);
-      await runbookApi.trigger(workpiece, selectedRunbook, variables);
-      setTriggerOpen(false);
-      setTriggerVariables("{}");
+      await runbookApi.upsertManifest(workpiece, selectedRunbook, manifestDraft);
+      mutate(`runbooks-${workpiece}`);
+      setManifestOpen(false);
     } catch (err) {
-      console.error("触发失败:", err);
+      console.error("保存 manifest 失败:", err);
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const updateManifestDraft = (index: number, patch: Partial<ManifestVariable>) => {
+    setManifestDraft((items) =>
+      items.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item))
+    );
   };
 
   const handleDelete = async () => {
@@ -184,9 +264,11 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
                     <Label htmlFor="type">类型</Label>
                     <Select
                       value={formData.type}
-                      onValueChange={(value) =>
-                        setFormData({ ...formData, type: value as RunbookUpsertRequest["type"] })
-                      }
+                      onValueChange={(value) => {
+                        const nextType = value as RunbookUpsertRequest["type"];
+                        setFormData({ ...formData, type: nextType, runtime: nextType === "Script" ? formData.runtime || "bash" : formData.runtime });
+                        setContentMode(nextType === "Terraform" ? "files" : "inline");
+                      }}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -220,6 +302,48 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
                     </Select>
                   </div>
                 )}
+                {formData.type === "Terraform" && (
+                  <Tabs value={contentMode} onValueChange={(value) => setContentMode(value as "inline" | "files")}>
+                    <TabsList>
+                      <TabsTrigger value="files">文件包</TabsTrigger>
+                      <TabsTrigger value="inline">Inline</TabsTrigger>
+                    </TabsList>
+                    <TabsContent value="files" className="space-y-3">
+                      <div className="grid gap-2">
+                        <Label htmlFor="entry-file">入口文件</Label>
+                        <Input
+                          id="entry-file"
+                          placeholder="main.tf"
+                          value={entryFile}
+                          onChange={(e) => setEntryFile(e.target.value)}
+                        />
+                      </div>
+                      <div className="grid gap-2">
+                        <Label htmlFor="files">文件</Label>
+                        <Input
+                          id="files"
+                          type="file"
+                          multiple
+                          onChange={(e) => setUploadFiles(Array.from(e.target.files || []))}
+                        />
+                      </div>
+                      {uploadFiles.length > 0 && (
+                        <div className="max-h-32 overflow-y-auto rounded-md border p-2 text-sm">
+                          {uploadFiles.map((file) => {
+                            const path = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+                            return (
+                              <div key={`${path}-${file.size}`} className="flex items-center justify-between gap-3 py-1">
+                                <span className="truncate">{path}</span>
+                                <span className="shrink-0 text-muted-foreground">{file.size} B</span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </TabsContent>
+                    <TabsContent value="inline" />
+                  </Tabs>
+                )}
                 <div className="grid gap-2">
                   <Label htmlFor="description">描述</Label>
                   <Input
@@ -231,6 +355,7 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
                     }
                   />
                 </div>
+                {contentMode === "inline" && (
                 <div className="grid gap-2">
                   <Label htmlFor="content">内容</Label>
                   <Textarea
@@ -244,6 +369,7 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
                     required
                   />
                 </div>
+                )}
               </div>
               <DialogFooter>
                 <Button
@@ -296,12 +422,16 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => {
-                          setSelectedRunbook(runbook.name);
-                          setTriggerOpen(true);
-                        }}
+                        onClick={() => openTriggerDialog(runbook.name)}
                       >
                         <Play className="h-4 w-4 text-primary" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => openManifestDialog(runbook.name)}
+                      >
+                        <Settings2 className="h-4 w-4 text-muted-foreground" />
                       </Button>
                       <Button
                         variant="ghost"
@@ -323,6 +453,12 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
                   </p>
                   <div className="mt-4 flex items-center gap-2">
                     <Badge variant="outline">{runbook.type}</Badge>
+                    {runbook.content_mode === "files" && (
+                      <Badge variant="secondary">
+                        <Upload className="mr-1 h-3 w-3" />
+                        {runbook.files_summary?.count || 0} 文件
+                      </Badge>
+                    )}
                     <span className="text-sm text-muted-foreground">
                       {runbook.manifest_summary.variables} 变量
                     </span>
@@ -337,34 +473,96 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
         </div>
       )}
 
-      {/* Trigger Dialog */}
-      <Dialog open={triggerOpen} onOpenChange={setTriggerOpen}>
-        <DialogContent>
+      <TaskParameterDialog
+        open={triggerOpen}
+        onOpenChange={setTriggerOpen}
+        title="触发运行手册"
+        description={`执行运行手册 "${selectedRunbook || ""}"`}
+        manifestItems={manifestItems}
+        submitLabel="执行"
+        isSubmitting={isSubmitting}
+        errorText={triggerError}
+        onSubmit={handleTrigger}
+      />
+
+      {/* Manifest Dialog */}
+      <Dialog open={manifestOpen} onOpenChange={setManifestOpen}>
+        <DialogContent className="max-w-3xl">
           <DialogHeader>
-            <DialogTitle>触发运行手册</DialogTitle>
+            <DialogTitle>编辑 Manifest</DialogTitle>
             <DialogDescription>
-              执行运行手册 &quot;{selectedRunbook}&quot;
+              更新运行手册 &quot;{selectedRunbook}&quot; 的变量声明
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-4 py-4">
-            <div className="grid gap-2">
-              <Label htmlFor="variables">变量 (JSON)</Label>
-              <Textarea
-                id="variables"
-                className="h-32 font-mono text-sm"
-                value={triggerVariables}
-                onChange={(e) => setTriggerVariables(e.target.value)}
-                placeholder='{"key": "value"}'
-              />
-            </div>
+          <div className="max-h-[60vh] space-y-3 overflow-y-auto py-4">
+            {manifestDraft.map((item, index) => (
+              <div key={item.name} className="grid gap-3 rounded-md border p-3">
+                <div className="grid gap-3 md:grid-cols-[1.4fr_1fr_120px_90px]">
+                  <div className="grid gap-2">
+                    <Label htmlFor={`manifest-name-${index}`}>变量名</Label>
+                    <Input id={`manifest-name-${index}`} value={item.name} readOnly />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label htmlFor={`manifest-display-${index}`}>显示名</Label>
+                    <Input
+                      id={`manifest-display-${index}`}
+                      value={item.display_name}
+                      onChange={(e) => updateManifestDraft(index, { display_name: e.target.value })}
+                    />
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>方向</Label>
+                    <Select
+                      value={item.direction}
+                      disabled={readonlySystemVariables.has(item.name)}
+                      onValueChange={(value) =>
+                        updateManifestDraft(index, { direction: value as ManifestVariable["direction"] })
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="input">Input</SelectItem>
+                        <SelectItem value="output">Output</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid gap-2">
+                    <Label>必填</Label>
+                    <Select
+                      value={item.required ? "true" : "false"}
+                      disabled={readonlySystemVariables.has(item.name)}
+                      onValueChange={(value) => updateManifestDraft(index, { required: value === "true" })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="false">否</SelectItem>
+                        <SelectItem value="true">是</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid gap-2">
+                  <Label htmlFor={`manifest-default-${index}`}>默认值</Label>
+                  <Input
+                    id={`manifest-default-${index}`}
+                    value={item.default_value}
+                    onChange={(e) => updateManifestDraft(index, { default_value: e.target.value })}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTriggerOpen(false)}>
+            <Button variant="outline" onClick={() => setManifestOpen(false)}>
               取消
             </Button>
-            <Button onClick={handleTrigger} disabled={isSubmitting}>
+            <Button onClick={handleManifestSave} disabled={isSubmitting}>
               {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              执行
+              保存
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -390,6 +588,14 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TaskLogDialog
+        open={logOpen}
+        onOpenChange={setLogOpen}
+        workpiece={workpiece}
+        taskId={logTask?.task_id || null}
+        initialTask={logTask}
+      />
     </div>
   );
 }

@@ -1,6 +1,7 @@
 """轻量单元测试：日志后端选择、manifest 循环引用、DDL 脚本静态检查。"""
 
 import re
+import sys
 from pathlib import Path
 
 import bcrypt
@@ -9,8 +10,8 @@ import pytest
 from autoopshub import auth_service
 from autoopshub import executors
 from autoopshub.auth_service import AuthService
-from autoopshub.executors import build_script_argv
-from autoopshub.log_backend import LogBackendManager, LogRecordData
+from autoopshub.executors import build_runtime_override_argv, build_script_argv, dispatch_execution
+from autoopshub.log_backend import LogBackendManager, LogRecordData, MemoryLogBackend
 from autoopshub.manifest_resolve import ManifestItem, resolve_nested_defaults
 from autoopshub.settings import APIKeySettings, AppSettings, RuntimeCommands, load_settings
 
@@ -35,6 +36,20 @@ def test_log_backend_defaults_to_memory_without_redis(monkeypatch: pytest.Monkey
     assert seq == 1
     rows = mgr.backend.read_after("wp", "t1", 0, 10)
     assert len(rows) == 1
+
+
+def test_memory_log_backend_is_process_local_and_non_persistent() -> None:
+    first = MemoryLogBackend()
+    first.append(
+        "wp",
+        "t1",
+        LogRecordData(task_id="t1", log_seq=0, ts="2026-01-01T00:00:00+00:00", level="info", message="kept"),
+    )
+
+    second = MemoryLogBackend()
+
+    assert first.read_after("wp", "t1", 0, 10)
+    assert second.read_after("wp", "t1", 0, 10) == []
 
 
 def test_manifest_nested_default_cycle_raises() -> None:
@@ -123,6 +138,211 @@ def test_unix_shebang_script_launches_rendered_file_directly(
     argv = build_script_argv(settings, rendered_path, "#!/usr/bin/env python3\nprint('ok')\n", None)
 
     assert argv == [str(rendered_path)]
+
+
+def test_runtime_override_command_renders_system_and_short_aliases() -> None:
+    argv = build_runtime_override_argv(
+        "ansible-playbook -i {{ system.inventory_file }} {{ runbook_file }} --limit {{ host }}",
+        {
+            "system.inventory_file": "/tmp/inventory.ini",
+            "system.runbook_file": "/tmp/playbook.yml",
+            "host": "localhost",
+        },
+    )
+
+    assert argv == [
+        "ansible-playbook",
+        "-i",
+        "/tmp/inventory.ini",
+        "/tmp/playbook.yml",
+        "--limit",
+        "localhost",
+    ]
+
+
+def test_ansible_dispatch_uses_system_set_runtime_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv, cwd, env, timeout_sec, log):
+        calls.append(argv)
+        return executors.ExecResult(exit_code=0, error_summary="", command=argv)
+
+    monkeypatch.setattr(executors, "run_subprocess_with_logging", fake_run)
+    monkeypatch.setattr(executors, "check_tokens_available", lambda argv: type("Check", (), {"ok": True, "message": ""})())
+    settings = AppSettings()
+    runtime_dir = Path(".codex-tmp") / "test-runtime-command"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+
+    result = dispatch_execution(
+        settings,
+        "Ansible",
+        runtime_dir,
+        runtime_dir / "playbook.yml",
+        "---\n",
+        None,
+        {
+            "system.set_runtime": "ansible-playbook -i {{ inventory_file }} {{ runbook_file }}",
+            "system.inventory_file": str(runtime_dir / "inventory.ini"),
+            "system.runbook_file": str(runtime_dir / "playbook.yml"),
+        },
+        30,
+        lambda level, message: None,
+    )
+
+    assert result.exit_code == 0
+    assert calls == [["ansible-playbook", "-i", str(runtime_dir / "inventory.ini"), str(runtime_dir / "playbook.yml")]]
+    assert result.command == calls[0]
+
+
+def test_empty_system_set_runtime_uses_default_terraform_apply(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv, cwd, env, timeout_sec, log):
+        calls.append(argv)
+        return executors.ExecResult(exit_code=0, error_summary="", command=argv)
+
+    monkeypatch.setattr(executors, "run_subprocess_with_logging", fake_run)
+    monkeypatch.setattr(executors, "check_command_available", lambda command: type("Check", (), {"ok": True, "message": ""})())
+    settings = AppSettings(runtime_commands=RuntimeCommands(terraform_bin="terraform"))
+    runtime_dir = Path(".codex-tmp") / "test-empty-runtime-command"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    rendered_path = runtime_dir / "main.tf"
+    rendered_path.write_text("resource \"null_resource\" \"x\" {}\n", encoding="utf-8")
+
+    result = dispatch_execution(
+        settings,
+        "Terraform",
+        runtime_dir,
+        rendered_path,
+        "",
+        None,
+        {"system.set_runtime": ""},
+        30,
+        lambda level, message: None,
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ["terraform", "init", "-input=false"],
+        ["terraform", "apply", "-input=false", "-auto-approve"],
+    ]
+
+
+def test_terraform_override_runs_init_and_moves_chdir_before_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(argv, cwd, env, timeout_sec, log):
+        calls.append(argv)
+        return executors.ExecResult(exit_code=0, error_summary="", command=argv)
+
+    monkeypatch.setattr(executors, "run_subprocess_with_logging", fake_run)
+    monkeypatch.setattr(executors, "check_tokens_available", lambda argv: type("Check", (), {"ok": True, "message": ""})())
+    settings = AppSettings(runtime_commands=RuntimeCommands(terraform_bin="terraform"))
+    runtime_dir = Path(".codex-tmp") / "test-terraform-chdir"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    rendered_path = runtime_dir / "main.tf"
+    rendered_path.write_text("resource \"null_resource\" \"x\" {}\n", encoding="utf-8")
+
+    result = dispatch_execution(
+        settings,
+        "Terraform",
+        runtime_dir,
+        rendered_path,
+        "",
+        None,
+        {
+            "system.set_runtime": "terraform destroy -chdir={{ runbook_path }} -auto-approve",
+            "system.runbook_path": str(runtime_dir),
+        },
+        30,
+        lambda level, message: None,
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        ["terraform", f"-chdir={runtime_dir}", "init", "-input=false"],
+        ["terraform", f"-chdir={runtime_dir}", "destroy", "-auto-approve"],
+    ]
+    assert result.command == calls[1]
+
+
+@pytest.mark.parametrize(
+    ("runbook_type", "runtime_commands", "runbook_runtime", "expected_command"),
+    [
+        ("Terraform", RuntimeCommands(terraform_bin="autoopshub-missing-terraform"), None, "autoopshub-missing-terraform"),
+        ("Ansible", RuntimeCommands(ansible_playbook_bin="autoopshub-missing-ansible"), None, "autoopshub-missing-ansible"),
+        ("Script", RuntimeCommands(), "autoopshub-missing-shell", "autoopshub-missing-shell"),
+    ],
+)
+def test_dispatch_marks_missing_runtime_command_unavailable(
+    runbook_type: str,
+    runtime_commands: RuntimeCommands,
+    runbook_runtime: str | None,
+    expected_command: str,
+) -> None:
+    runtime_dir = Path(".codex-tmp") / f"missing-{runbook_type.lower()}"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    rendered_path = runtime_dir / "runbook.rendered"
+    rendered_text = "" if runbook_type == "Script" else "echo ok\n"
+    rendered_path.write_text(rendered_text, encoding="utf-8")
+    logs: list[tuple[str, str]] = []
+
+    result = dispatch_execution(
+        AppSettings(runtime_commands=runtime_commands),
+        runbook_type,
+        runtime_dir,
+        rendered_path,
+        rendered_text,
+        runbook_runtime,
+        {},
+        30,
+        lambda level, message: logs.append((level, message)),
+    )
+
+    assert result.exit_code == 127
+    assert result.command and result.command[0] == expected_command
+    assert logs and logs[-1][0] == "error"
+
+
+def test_subprocess_logging_captures_stdout_stderr_and_nonzero_exit() -> None:
+    runtime_dir = Path(".codex-tmp") / "subprocess-nonzero"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    logs: list[tuple[str, str]] = []
+
+    result = executors.run_subprocess_with_logging(
+        [
+            sys.executable,
+            "-c",
+            "import sys; print('hello-out'); print('hello-err', file=sys.stderr); sys.exit(3)",
+        ],
+        runtime_dir,
+        None,
+        30,
+        lambda level, message: logs.append((level, message)),
+    )
+
+    assert result.exit_code == 3
+    assert ("info", "hello-out") in logs
+    assert ("error", "hello-err") in logs
+    assert "命令退出码 3" in result.error_summary
+
+
+def test_subprocess_timeout_kills_process_and_reports_124() -> None:
+    runtime_dir = Path(".codex-tmp") / "subprocess-timeout"
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    logs: list[tuple[str, str]] = []
+
+    result = executors.run_subprocess_with_logging(
+        [sys.executable, "-c", "import time; time.sleep(10)"],
+        runtime_dir,
+        None,
+        1,
+        lambda level, message: logs.append((level, message)),
+    )
+
+    assert result.exit_code == 124
+    assert result.error_summary == "runtime execution timeout"
+    assert any("超时" in message for _level, message in logs)
 
 
 def test_api_key_validation_uses_effective_minimum_prefix(
