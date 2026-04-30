@@ -8,6 +8,7 @@ TEST_HOME.mkdir(parents=True, exist_ok=True)
 os.environ["AUTOOPSHUB_HOME"] = str(TEST_HOME)
 os.environ["AUTOOPSHUB_REQUIRE_AUTH"] = "false"
 
+import main
 from main import app
 
 client = TestClient(app)
@@ -111,3 +112,25 @@ def test_task_list_detail_update_confirm_cancel():
 
     cancel_running = client.post(f"/api/workpieces/tasks-wp/tasks/{task_id}/cancel")
     assert cancel_running.status_code in (200, 409)
+
+
+def test_confirm_ready_task_is_idempotent_and_queues_execution_once(monkeypatch):
+    calls: list[str] = []
+
+    def fake_execute(workpiece_name, task):
+        calls.append(task.task_id)
+
+    monkeypatch.setattr(main, "_execute_task", fake_execute)
+    created = client.post(
+        "/api/workpieces/tasks-wp/runbooks/rb-req/trigger",
+        json={"variables": {"required_var": "v1"}},
+    )
+    assert created.status_code == 201
+    task_id = created.json()["task"]["task_id"]
+
+    first = client.post(f"/api/workpieces/tasks-wp/tasks/{task_id}/confirm")
+    second = client.post(f"/api/workpieces/tasks-wp/tasks/{task_id}/confirm")
+
+    assert first.status_code == 202
+    assert second.status_code == 409
+    assert calls == [task_id]

@@ -720,6 +720,53 @@ def test_multipart_runbook_invalid_manifest_does_not_replace_existing_package():
     assert "{{ other }}" not in (package_dir / "main.tf").read_text(encoding="utf-8")
 
 
+def test_inline_runbook_invalid_manifest_does_not_delete_existing_file_package():
+    client.delete("/api/workpieces/inline-invalid-manifest-atomic")
+    create_wp = client.post("/api/workpieces/inline-invalid-manifest-atomic", json={"description": "files"})
+    assert create_wp.status_code in (201, 409)
+
+    create = client.post(
+        "/api/workpieces/inline-invalid-manifest-atomic/runbooks/tf-package",
+        data={"type": "Terraform", "description": "original"},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+    assert create.status_code == 201
+
+    update = client.post(
+        "/api/workpieces/inline-invalid-manifest-atomic/runbooks/tf-package",
+        json={
+            "type": "Script",
+            "description": "bad inline",
+            "content": "echo {{ ok }}",
+            "runtime": "bash",
+            "manifest": [{"name": "missing", "direction": "input", "required": False}],
+        },
+    )
+
+    assert update.status_code == 422
+    detail = client.get("/api/workpieces/inline-invalid-manifest-atomic/runbooks/tf-package").json()
+    assert detail["content_mode"] == "files"
+    assert detail["description"] == "original"
+    package_dir = main._runbook_files_dir("inline-invalid-manifest-atomic", "tf-package")
+    assert (package_dir / "main.tf").exists()
+
+
+def test_multipart_runbook_malformed_manifest_item_returns_client_error():
+    error_client = TestClient(app, raise_server_exceptions=False)
+    client.delete("/api/workpieces/file-malformed-manifest")
+    create_wp = client.post("/api/workpieces/file-malformed-manifest", json={"description": "files"})
+    assert create_wp.status_code in (201, 409)
+
+    create = error_client.post(
+        "/api/workpieces/file-malformed-manifest/runbooks/tf-package",
+        data={"type": "Terraform", "manifest": json.dumps([{"direction": "input"}])},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"x\" {}\n", "text/plain"))],
+    )
+
+    assert create.status_code == 422
+    assert "manifest" in str(create.json()["detail"]).lower()
+
+
 def test_multipart_runbook_returns_clear_error_when_parser_dependency_is_missing(monkeypatch: pytest.MonkeyPatch):
     client.delete("/api/workpieces/file-parser-missing")
     create_wp = client.post("/api/workpieces/file-parser-missing", json={"description": "files"})

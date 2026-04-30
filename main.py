@@ -1291,7 +1291,10 @@ def _parse_manifest_field(raw: str | None) -> list[ManifestVariable] | None:
         payload = payload["items"]
     if not isinstance(payload, list):
         raise HTTPException(status_code=422, detail="manifest must be a JSON array")
-    return [ManifestVariable.model_validate(item) for item in payload]
+    try:
+        return [ManifestVariable.model_validate(item) for item in payload]
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail={"message": "manifest item validation failed", "errors": exc.errors()}) from exc
 
 
 def _upsert_inline_runbook(workpiece_name: str, runbook_name: str, body: RunbookUpsertRequest) -> dict[str, Any]:
@@ -1306,6 +1309,8 @@ def _upsert_inline_runbook(workpiece_name: str, runbook_name: str, body: Runbook
     if body.type == RunbookType.WORKFLOW:
         _validate_workflow_references(workpiece_name, runbook_name, body.content)
     _validate_runbook_manifest_on_create(body.content, body.manifest)
+    template_vars = _combined_template_var_names(body.content, include_all_system=True)
+    merged_manifest = _normalize_manifest(template_vars, body.manifest)
     runbook = RunbookRecord(
         name=runbook_name,
         type=body.type,
@@ -1320,8 +1325,6 @@ def _upsert_inline_runbook(workpiece_name: str, runbook_name: str, body: Runbook
     )
     _save_runbook(workpiece_name, runbook)
     _delete_runbook_file_package(workpiece_name, runbook_name)
-    template_vars = _combined_template_var_names(body.content, include_all_system=True)
-    merged_manifest = _normalize_manifest(template_vars, body.manifest)
     _save_manifest(workpiece_name, runbook_name, merged_manifest)
     return _runbook_payload(workpiece_name, runbook)
 
@@ -1512,6 +1515,8 @@ async def confirm_task(workpiece_name: str, task_id: str, background_tasks: Back
     task = _load_task(workpiece_name, task_id)
     if task.status == TaskStatus.CANCELED:
         raise HTTPException(status_code=409, detail="task already canceled")
+    if task.schedule.get("confirmed_at"):
+        raise HTTPException(status_code=409, detail="task already confirmed")
     manifest = _load_manifest(workpiece_name, task.runbook_name)
     missing, unknown, _ = _validate_variables(manifest, task.variables)
     if missing or unknown:
@@ -1523,6 +1528,11 @@ async def confirm_task(workpiece_name: str, task_id: str, background_tasks: Back
                 "manifest": [m.model_dump() for m in manifest],
             },
         )
+    now = _utc_now()
+    task.schedule["confirmed_at"] = now
+    if task.status in {TaskStatus.PENDING, TaskStatus.READY}:
+        task.status = TaskStatus.RUNNING
+    task.updated_at = now
     task.error_summary = ""
     _save_task(workpiece_name, task)
     background_tasks.add_task(_execute_task, workpiece_name, task)
