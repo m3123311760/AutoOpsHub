@@ -514,6 +514,21 @@ def _file_package_template_vars(workpiece_name: str, runbook_name: str, *, inclu
     return names
 
 
+def _uploaded_package_template_vars(files: list[tuple[str, bytes]], *, include_all_system: bool = False) -> set[str]:
+    names: set[str] = set()
+    for relative_path, content in files:
+        if PurePosixPath(relative_path).suffix.lower() not in TEXT_SCAN_EXTENSIONS:
+            continue
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        names |= _combined_template_var_names(text, include_all_system=include_all_system)
+    if include_all_system:
+        names |= SYSTEM_RESERVED_NAMES
+    return names
+
+
 def _files_summary(files: list[tuple[str, bytes]]) -> dict[str, Any]:
     paths = [path for path, _content in files]
     return {
@@ -1331,7 +1346,6 @@ async def _upsert_file_package_runbook(workpiece_name: str, runbook_name: str, r
     now = _utc_now()
     old_created_at = _load_runbook(workpiece_name, runbook_name).created_at if exists else now
 
-    _replace_runbook_file_package(workpiece_name, runbook_name, files)
     runbook = RunbookRecord(
         name=runbook_name,
         type=runbook_type,
@@ -1344,9 +1358,10 @@ async def _upsert_file_package_runbook(workpiece_name: str, runbook_name: str, r
         created_at=old_created_at,
         updated_at=now,
     )
-    _save_runbook(workpiece_name, runbook)
-    template_vars = _file_package_template_vars(workpiece_name, runbook_name, include_all_system=True)
+    template_vars = _uploaded_package_template_vars(files, include_all_system=True)
     merged_manifest = _normalize_manifest(template_vars, manifest)
+    _replace_runbook_file_package(workpiece_name, runbook_name, files)
+    _save_runbook(workpiece_name, runbook)
     _save_manifest(workpiece_name, runbook_name, merged_manifest)
     return _runbook_payload(workpiece_name, runbook)
 

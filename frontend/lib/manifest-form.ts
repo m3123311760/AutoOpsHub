@@ -17,3 +17,18 @@ export function collectManifestInputVariables(
       .map((item) => [item.name, values[item.name]])
   );
 }
+
+export function parseJsonVariableText(text: string): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(text || "{}");
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("变量必须是 JSON 对象");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error("变量必须是有效 JSON");
+    }
+    throw error;
+  }
+}

@@ -18,6 +18,7 @@ import type { ManifestVariable } from "@/lib/api";
 import {
   buildInitialManifestValues,
   collectManifestInputVariables,
+  parseJsonVariableText,
   type ManifestValueMap,
 } from "@/lib/manifest-form";
 
@@ -61,18 +62,30 @@ export function TaskParameterDialog({
 }: TaskParameterDialogProps) {
   const [values, setValues] = useState<ManifestValueMap>({});
   const [jsonText, setJsonText] = useState(fallbackJson);
+  const [jsonError, setJsonError] = useState("");
 
   useEffect(() => {
     if (!open) return;
     setValues(valuesFromManifest(manifestItems, initialValues));
     setJsonText(initialValues ? JSON.stringify(initialValues, null, 2) : fallbackJson);
+    setJsonError("");
   }, [fallbackJson, initialValues, manifestItems, open]);
 
   const inputItems = manifestItems.filter((item) => item.direction === "input");
 
   const handleSubmit = async () => {
-    const variables =
-      manifestItems.length > 0 ? collectManifestInputVariables(manifestItems, values) : JSON.parse(jsonText || "{}");
+    let variables: Record<string, unknown>;
+    if (manifestItems.length > 0) {
+      variables = collectManifestInputVariables(manifestItems, values);
+    } else {
+      try {
+        variables = parseJsonVariableText(jsonText);
+      } catch (error) {
+        setJsonError(error instanceof Error ? error.message : "变量必须是有效 JSON");
+        return;
+      }
+    }
+    setJsonError("");
     await onSubmit(variables);
   };
 
@@ -112,7 +125,9 @@ export function TaskParameterDialog({
               />
             </div>
           )}
-          {errorText && <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{errorText}</div>}
+          {(errorText || jsonError) && (
+            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{errorText || jsonError}</div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

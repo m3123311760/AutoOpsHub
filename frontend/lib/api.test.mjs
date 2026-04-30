@@ -19,7 +19,7 @@ globalThis.fetch = async (url, options) => {
 const { authApi, jobApi, runbookApi, taskApi, workpieceApi } = await import("./api.ts");
 const { stripAnsi } = await import("./ansi.ts");
 const { safeLoginRedirectTarget } = await import("./auth-routes.ts");
-const { buildInitialManifestValues, collectManifestInputVariables } = await import("./manifest-form.ts");
+const { buildInitialManifestValues, collectManifestInputVariables, parseJsonVariableText } = await import("./manifest-form.ts");
 const { recentTasks, workpieceHref, workpieceRouteParam } = await import("./routes.ts");
 
 afterEach(() => {
@@ -236,6 +236,11 @@ test("manifest form helpers initialize defaults and collect editable input varia
     environment: "local",
     "system.host": "localhost",
   });
+});
+
+test("manifest form helper reports malformed fallback JSON as a validation error", () => {
+  assert.deepEqual(parseJsonVariableText('{"region":"west"}'), { region: "west" });
+  assert.throws(() => parseJsonVariableText('{"region":'), /有效 JSON/);
 });
 
 test("stripAnsi removes terminal color and style escape sequences", () => {

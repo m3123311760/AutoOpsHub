@@ -690,6 +690,36 @@ def test_multipart_runbook_rejects_duplicate_manifest_variables():
     assert "重复声明" in create.json()["detail"]
 
 
+def test_multipart_runbook_invalid_manifest_does_not_replace_existing_package():
+    client.delete("/api/workpieces/file-invalid-manifest-atomic")
+    create_wp = client.post("/api/workpieces/file-invalid-manifest-atomic", json={"description": "files"})
+    assert create_wp.status_code in (201, 409)
+
+    create = client.post(
+        "/api/workpieces/file-invalid-manifest-atomic/runbooks/tf-package",
+        data={"type": "Terraform", "description": "original"},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+    assert create.status_code == 201
+
+    update = client.post(
+        "/api/workpieces/file-invalid-manifest-atomic/runbooks/tf-package",
+        data={
+            "type": "Terraform",
+            "description": "bad update",
+            "manifest": json.dumps([{"name": "missing", "direction": "input", "required": False}]),
+        },
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ other }}\" {}\n", "text/plain"))],
+    )
+
+    assert update.status_code == 422
+    detail = client.get("/api/workpieces/file-invalid-manifest-atomic/runbooks/tf-package").json()
+    assert detail["description"] == "original"
+    package_dir = main._runbook_files_dir("file-invalid-manifest-atomic", "tf-package")
+    assert "{{ name }}" in (package_dir / "main.tf").read_text(encoding="utf-8")
+    assert "{{ other }}" not in (package_dir / "main.tf").read_text(encoding="utf-8")
+
+
 def test_multipart_runbook_returns_clear_error_when_parser_dependency_is_missing(monkeypatch: pytest.MonkeyPatch):
     client.delete("/api/workpieces/file-parser-missing")
     create_wp = client.post("/api/workpieces/file-parser-missing", json={"description": "files"})
