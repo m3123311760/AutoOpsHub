@@ -1,0 +1,28 @@
+services:
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NODE_IMAGE: ${AUTOOPSHUB_FRONTEND_NODE_IMAGE:-node:24-alpine}
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8000}
+    image: ${AUTOOPSHUB_FRONTEND_IMAGE:-autoopshub/frontend}:${AUTOOPSHUB_FRONTEND_TAG:-latest}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: ${NEXT_TELEMETRY_DISABLED:-1}
+      PORT: ${AUTOOPSHUB_FRONTEND_CONTAINER_PORT:-3000}
+      HOSTNAME: ${AUTOOPSHUB_FRONTEND_HOSTNAME:-0.0.0.0}
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://127.0.0.1:8000}
+    ports:
+      - "${AUTOOPSHUB_FRONTEND_PORT:-3000}:${AUTOOPSHUB_FRONTEND_CONTAINER_PORT:-3000}"
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:${AUTOOPSHUB_FRONTEND_CONTAINER_PORT:-3000}').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\"",
+        ]
+      interval: ${AUTOOPSHUB_FRONTEND_HEALTH_INTERVAL:-30s}
+      timeout: ${AUTOOPSHUB_FRONTEND_HEALTH_TIMEOUT:-5s}
+      retries: ${AUTOOPSHUB_FRONTEND_HEALTH_RETRIES:-5}
+      start_period: ${AUTOOPSHUB_FRONTEND_HEALTH_START_PERIOD:-30s}

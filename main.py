@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import shutil
 import tempfile
 from datetime import datetime, timezone
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
 from uuid import uuid4
 
 import yaml
 from croniter import croniter
-from fastapi import FastAPI, Header, HTTPException, Request, Response
+from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from jinja2 import Environment, meta
 from jinja2 import Template
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from autoopshub.auth_service import AuthService
 from autoopshub.db_schema import assert_auth_schema_present
@@ -141,6 +142,9 @@ class RunbookRecord(BaseModel):
     description: str = ""
     content: str
     runtime: str | None = None
+    content_mode: Literal["inline", "files"] = "inline"
+    entry_file: str | None = None
+    files_summary: dict[str, Any] = Field(default_factory=dict)
     created_at: str
     updated_at: str
 
@@ -200,6 +204,10 @@ class TaskVariablesUpdateRequest(BaseModel):
     variables: dict[str, Any] = Field(default_factory=dict)
 
 
+class TaskRerunRequest(BaseModel):
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
 class JobUpsertRequest(BaseModel):
     job_name: str | None = None
     description: str = ""
@@ -241,9 +249,24 @@ def _manifest_items_dict(manifest: list[ManifestVariable]) -> dict[str, Manifest
     return {m.name: ManifestItem(name=m.name, default_value=m.default_value) for m in manifest}
 
 
-def _validate_runbook_manifest_on_create(content: str, manifest: list[ManifestVariable] | None) -> None:
-    if template_assigns_system_var(content):
-        raise HTTPException(status_code=422, detail="禁止在模板中使用 {% set system.* %} 为系统保留变量赋值")
+def _manifest_default(manifest: list[ManifestVariable], name: str) -> str:
+    for item in manifest:
+        if item.name == name:
+            return item.default_value
+    return ""
+
+
+def _script_uses_system_set_runtime(content: str) -> bool:
+    lines = content.splitlines()
+    return bool(lines and lines[0].strip() == "{{ system.set_runtime }}")
+
+
+def _drop_first_line(text: str) -> str:
+    lines = text.splitlines(keepends=True)
+    return "".join(lines[1:]) if lines else text
+
+
+def _validate_manifest_on_create(manifest: list[ManifestVariable] | None) -> None:
     names = [m.name for m in (manifest or [])]
     dups = detect_duplicate_names(names)
     if dups:
@@ -251,6 +274,12 @@ def _validate_runbook_manifest_on_create(content: str, manifest: list[ManifestVa
     for item in manifest or []:
         if item.name in SYSTEM_RESERVED_NAMES:
             raise HTTPException(status_code=422, detail="禁止在创建 runbook 的 manifest 中提前声明系统保留变量")
+
+
+def _validate_runbook_manifest_on_create(content: str, manifest: list[ManifestVariable] | None) -> None:
+    if template_assigns_system_var(content):
+        raise HTTPException(status_code=422, detail="禁止在模板中使用 {% set system.* %} 为系统保留变量赋值")
+    _validate_manifest_on_create(manifest)
 
 
 def _validate_task_variables_against_readonly(manifest: list[ManifestVariable], variables: dict[str, Any]) -> None:
@@ -277,11 +306,16 @@ def _jinja_render_context(variables: dict[str, Any]) -> dict[str, Any]:
     }
     if system_vars:
         context["system"] = system_vars
+        for key, value in system_vars.items():
+            context.setdefault(key, value)
     return context
 
 
-def _combined_template_var_names(content: str) -> set[str]:
-    return extract_user_template_vars(content) | extract_system_refs_from_template(content)
+def _combined_template_var_names(content: str, *, include_all_system: bool = False) -> set[str]:
+    names = extract_user_template_vars(content) | extract_system_refs_from_template(content)
+    if include_all_system:
+        names |= SYSTEM_RESERVED_NAMES
+    return names
 
 
 def _base_dir() -> Path:
@@ -309,6 +343,10 @@ def _setting_path(workpiece_name: str) -> Path:
 
 def _runbook_path(workpiece_name: str, runbook_name: str) -> Path:
     return _workpiece_dir(workpiece_name) / "runbooks" / f"{runbook_name}.json"
+
+
+def _runbook_files_dir(workpiece_name: str, runbook_name: str) -> Path:
+    return _workpiece_dir(workpiece_name) / "runbooks" / f"{runbook_name}.files"
 
 
 def _manifest_path(workpiece_name: str, runbook_name: str) -> Path:
@@ -383,6 +421,22 @@ def _save_manifest(workpiece_name: str, runbook_name: str, manifest: list[Manife
 def _load_manifest(workpiece_name: str, runbook_name: str) -> list[ManifestVariable]:
     path = _manifest_path(workpiece_name, runbook_name)
     if not path.exists():
+        items: list[ManifestVariable] = []
+    else:
+        payload = _read_json(path)
+        items = [ManifestVariable.model_validate(item) for item in payload.get("items", [])]
+    runbook_path = _runbook_path(workpiece_name, runbook_name)
+    if runbook_path.exists():
+        runbook_payload = _read_json(runbook_path)
+        if runbook_payload.get("content_mode") == "files":
+            template_vars = _file_package_template_vars(workpiece_name, runbook_name, include_all_system=True)
+        else:
+            template_vars = _combined_template_var_names(str(runbook_payload.get("content", "")), include_all_system=True)
+        normalized = _normalize_manifest(template_vars, items, allow_extra_user_vars=True)
+        if [item.model_dump() for item in normalized] != [item.model_dump() for item in items]:
+            _save_manifest(workpiece_name, runbook_name, normalized)
+        return normalized
+    if not path.exists():
         return []
     payload = _read_json(path)
     return [ManifestVariable.model_validate(item) for item in payload.get("items", [])]
@@ -392,6 +446,198 @@ def _runbook_payload(workpiece_name: str, runbook: RunbookRecord) -> dict[str, A
     payload = runbook.model_dump()
     payload["manifest_summary"] = {"variables": len(_load_manifest(workpiece_name, runbook.name))}
     return payload
+
+
+TEXT_SCAN_EXTENSIONS = {
+    ".tf",
+    ".tfvars",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".sh",
+    ".tpl",
+    ".txt",
+    ".hcl",
+}
+
+
+def _safe_package_relative_path(raw_path: str | None) -> str:
+    raw = (raw_path or "").strip()
+    if not raw or raw.endswith("/") or raw.endswith("\\"):
+        raise HTTPException(status_code=422, detail="上传文件路径不能为空或目录路径")
+    if "\\" in raw:
+        raise HTTPException(status_code=422, detail="上传文件路径必须使用安全相对路径")
+    if PureWindowsPath(raw).drive or PureWindowsPath(raw).root:
+        raise HTTPException(status_code=422, detail="禁止上传绝对路径或 Windows 盘符路径")
+    normalized = posixpath.normpath(raw)
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or normalized in {"", "."} or any(part in {"..", ""} for part in path.parts):
+        raise HTTPException(status_code=422, detail="禁止上传绝对路径、空路径或路径穿越")
+    return normalized
+
+
+def _ensure_path_inside(root: Path, relative_path: str) -> Path:
+    target = (root / Path(*PurePosixPath(relative_path).parts)).resolve()
+    root_resolved = root.resolve()
+    if target != root_resolved and root_resolved not in target.parents:
+        raise HTTPException(status_code=422, detail="上传文件路径逃逸文件包目录")
+    return target
+
+
+def _read_text_for_scan(path: Path) -> str | None:
+    if path.suffix.lower() not in TEXT_SCAN_EXTENSIONS:
+        return None
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _package_template_texts(workpiece_name: str, runbook_name: str) -> list[str]:
+    root = _runbook_files_dir(workpiece_name, runbook_name)
+    if not root.exists():
+        return []
+    texts: list[str] = []
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        text = _read_text_for_scan(path)
+        if text is not None:
+            texts.append(text)
+    return texts
+
+
+def _file_package_template_vars(workpiece_name: str, runbook_name: str, *, include_all_system: bool = False) -> set[str]:
+    names: set[str] = set()
+    for text in _package_template_texts(workpiece_name, runbook_name):
+        names |= _combined_template_var_names(text, include_all_system=include_all_system)
+    if include_all_system:
+        names |= SYSTEM_RESERVED_NAMES
+    return names
+
+
+def _uploaded_package_template_vars(files: list[tuple[str, bytes]], *, include_all_system: bool = False) -> set[str]:
+    names: set[str] = set()
+    for relative_path, content in files:
+        if PurePosixPath(relative_path).suffix.lower() not in TEXT_SCAN_EXTENSIONS:
+            continue
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        names |= _combined_template_var_names(text, include_all_system=include_all_system)
+    if include_all_system:
+        names |= SYSTEM_RESERVED_NAMES
+    return names
+
+
+def _files_summary(files: list[tuple[str, bytes]]) -> dict[str, Any]:
+    paths = [path for path, _content in files]
+    return {
+        "count": len(files),
+        "total_bytes": sum(len(content) for _path, content in files),
+        "paths": paths[:100],
+    }
+
+
+def _select_entry_file(files: list[tuple[str, bytes]], requested: str | None) -> str:
+    paths = [path for path, _content in files]
+    if requested and requested.strip():
+        entry = _safe_package_relative_path(requested)
+        if entry not in paths:
+            raise HTTPException(status_code=422, detail="entry_file 必须指向已上传文件")
+        return entry
+    if "main.tf" in paths:
+        return "main.tf"
+    for path in paths:
+        if path.endswith(".tf"):
+            return path
+    return paths[0]
+
+
+def _replace_runbook_file_package(workpiece_name: str, runbook_name: str, files: list[tuple[str, bytes]]) -> None:
+    root = _runbook_files_dir(workpiece_name, runbook_name)
+    tmp = root.with_name(f"{root.name}.tmp-{uuid4().hex[:8]}")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True, exist_ok=True)
+    try:
+        for relative_path, content in files:
+            target = _ensure_path_inside(tmp, relative_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+        if root.exists():
+            shutil.rmtree(root)
+        shutil.move(str(tmp), str(root))
+    except Exception:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def _delete_runbook_file_package(workpiece_name: str, runbook_name: str) -> None:
+    shutil.rmtree(_runbook_files_dir(workpiece_name, runbook_name), ignore_errors=True)
+
+
+def _render_text_files_in_place(root: Path, variables: dict[str, Any]) -> None:
+    for path in sorted(p for p in root.rglob("*") if p.is_file()):
+        text = _read_text_for_scan(path)
+        if text is None:
+            continue
+        path.write_text(Template(text).render(**_jinja_render_context(variables)), encoding="utf-8")
+
+
+TERRAFORM_RERUN_STATE_ARTIFACTS = {
+    ".terraform",
+    ".terraform.lock.hcl",
+    "terraform.tfstate",
+    "terraform.tfstate.backup",
+    "terraform.tfstate.d",
+}
+
+
+def _prune_inherited_runtime_for_file_package(runtime_dir: Path) -> None:
+    for child in runtime_dir.iterdir():
+        if child.name in TERRAFORM_RERUN_STATE_ARTIFACTS:
+            continue
+        if child.is_dir():
+            _prune_inherited_runtime_for_file_package(child)
+            if not any(child.iterdir()):
+                child.rmdir()
+        else:
+            child.unlink()
+
+
+async def _uploaded_package_files(request: Request) -> tuple[dict[str, str], list[tuple[str, bytes]]]:
+    try:
+        form = await request.form()
+    except AssertionError as exc:
+        if "python-multipart" in str(exc):
+            raise HTTPException(
+                status_code=503,
+                detail="服务器缺少 python-multipart 依赖，无法解析 multipart/form-data 上传；请执行 pip install -r requirements.txt 后重启后端服务",
+            ) from exc
+        raise
+    fields = {key: str(value) for key, value in form.multi_items() if not hasattr(value, "filename")}
+    upload_items = [value for key, value in form.multi_items() if key == "files" and hasattr(value, "filename")]
+    if not upload_items:
+        raise HTTPException(status_code=422, detail="multipart runbook 必须上传至少一个 files 文件")
+    limits = settings.runbook_upload
+    if len(upload_items) > limits.max_files:
+        raise HTTPException(status_code=413, detail=f"上传文件数量超过限制: {limits.max_files}")
+    files: list[tuple[str, bytes]] = []
+    total = 0
+    seen: set[str] = set()
+    for upload in upload_items:
+        relative_path = _safe_package_relative_path(getattr(upload, "filename", ""))
+        if relative_path in seen:
+            raise HTTPException(status_code=422, detail=f"重复上传文件路径: {relative_path}")
+        seen.add(relative_path)
+        content = await upload.read()
+        if len(content) > limits.max_file_bytes:
+            raise HTTPException(status_code=413, detail=f"单文件大小超过限制: {relative_path}")
+        total += len(content)
+        if total > limits.max_total_bytes:
+            raise HTTPException(status_code=413, detail=f"上传文件总大小超过限制: {limits.max_total_bytes}")
+        files.append((relative_path, content))
+    return fields, files
 
 
 def _save_task(workpiece_name: str, task: TaskRecord) -> None:
@@ -433,9 +679,18 @@ def _extract_template_variables(content: str) -> set[str]:
     return set(meta.find_undeclared_variables(parsed))
 
 
-def _normalize_manifest(vars_from_template: set[str], manifest: list[ManifestVariable] | None) -> list[ManifestVariable]:
+def _normalize_manifest(
+    vars_from_template: set[str],
+    manifest: list[ManifestVariable] | None,
+    *,
+    allow_extra_user_vars: bool = False,
+) -> list[ManifestVariable]:
     provided = {item.name: item for item in (manifest or [])}
-    unknown = sorted(set(provided.keys()) - vars_from_template)
+    unknown_set = set(provided.keys()) - vars_from_template
+    if allow_extra_user_vars:
+        unknown_set = {name for name in unknown_set if name in SYSTEM_RESERVED_NAMES}
+        vars_from_template = vars_from_template | {item.name for item in (manifest or []) if item.name not in SYSTEM_RESERVED_NAMES}
+    unknown = sorted(unknown_set)
     if unknown:
         raise HTTPException(status_code=422, detail=f"unknown manifest variables: {', '.join(unknown)}")
     merged: list[ManifestVariable] = []
@@ -450,10 +705,10 @@ def _normalize_manifest(vars_from_template: set[str], manifest: list[ManifestVar
             required=False,
             default_value="",
         )
-        if name in provided:
-            merged.append(base.model_copy(update=provided[name].model_dump(exclude_unset=True)))
-        else:
-            merged.append(base)
+        item = base.model_copy(update=provided[name].model_dump(exclude_unset=True)) if name in provided else base
+        if name in SYSTEM_READONLY_NAMES:
+            item = item.model_copy(update={"direction": ManifestVariableDirection.OUTPUT, "required": False})
+        merged.append(item)
     return merged
 
 
@@ -517,6 +772,21 @@ def _list_tasks(workpiece_name: str) -> list[TaskRecord]:
     return items
 
 
+def _list_workpiece_names() -> list[str]:
+    root = _base_dir() / "workpieces"
+    if not root.exists():
+        return []
+    return sorted(path.name for path in root.iterdir() if path.is_dir() and _meta_path(path.name).exists())
+
+
+def _find_task_workpiece(task_id: str) -> tuple[str, TaskRecord]:
+    for workpiece_name in _list_workpiece_names():
+        path = _task_path(workpiece_name, task_id)
+        if path.exists():
+            return workpiece_name, TaskRecord.model_validate(_read_json(path))
+    raise HTTPException(status_code=404, detail="task not found")
+
+
 def _next_task_id() -> str:
     return f"task-{uuid4().hex[:12]}"
 
@@ -535,6 +805,13 @@ def _validate_variables(
 
 def _task_runtime_dir(task_id: str) -> Path:
     return Path(tempfile.gettempdir()) / "autoopshub" / task_id
+
+
+def _task_inherited_runtime_dir(task: TaskRecord) -> Path | None:
+    raw = task.schedule.get("inherited_runtime_dir")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    return Path(raw)
 
 
 def _append_task_log(workpiece_name: str, task: TaskRecord, level: LogLevel, message: str) -> int:
@@ -561,19 +838,57 @@ def _execute_task(workpiece_name: str, task: TaskRecord) -> TaskRecord:
         resolved_defaults = resolve_nested_defaults(items, task.variables)
         merged_vars: dict[str, Any] = {**resolved_defaults, **task.variables}
         runtime_dir = _task_runtime_dir(task.task_id)
+        if runtime_dir.exists():
+            shutil.rmtree(runtime_dir)
         runtime_dir.mkdir(parents=True, exist_ok=True)
-        suffix = runbook.type.value.lower()
-        rendered_path = runtime_dir / f"{runbook.name}.{suffix}.rendered"
+        inherited_runtime_dir = _task_inherited_runtime_dir(task)
+        inherited_runtime_copied = False
+        if inherited_runtime_dir and inherited_runtime_dir.exists() and inherited_runtime_dir.resolve() != runtime_dir.resolve():
+            shutil.copytree(inherited_runtime_dir, runtime_dir, dirs_exist_ok=True)
+            inherited_runtime_copied = True
+        if runbook.content_mode == "files":
+            package_dir = _runbook_files_dir(workpiece_name, runbook.name)
+            if not package_dir.exists():
+                raise ValueError("runbook 文件包不存在")
+            if inherited_runtime_copied:
+                _prune_inherited_runtime_for_file_package(runtime_dir)
+            shutil.copytree(package_dir, runtime_dir, dirs_exist_ok=True)
+            entry = runbook.entry_file or "main.tf"
+            rendered_path = _ensure_path_inside(runtime_dir, entry)
+        else:
+            suffix = runbook.type.value.lower()
+            rendered_path = runtime_dir / f"{runbook.name}.{suffix}.rendered"
         merged_vars["system.runbook_file"] = str(rendered_path)
         merged_vars["system.runbook_path"] = str(runtime_dir)
         merged_vars["system.output"] = str(runtime_dir / "system.output")
         merged_vars["system.env_file"] = str(runtime_dir / "autoopshub.env")
+        Path(str(merged_vars["system.output"])).mkdir(parents=True, exist_ok=True)
         if not str(merged_vars.get("system.inventory_file", "")).strip():
             merged_vars["system.inventory_file"] = str(runtime_dir / "inventory.ini")
-        rendered = Template(runbook.content).render(**_jinja_render_context(merged_vars))
-        rendered_path.write_text(rendered, encoding="utf-8")
+        set_runtime_raw = (
+            task.variables["system.set_runtime"]
+            if "system.set_runtime" in task.variables
+            else _manifest_default(manifest, "system.set_runtime")
+        )
+        set_runtime_template = "" if set_runtime_raw is None else str(set_runtime_raw)
+        if set_runtime_template.strip():
+            merged_vars["system.set_runtime"] = Template(set_runtime_template).render(**_jinja_render_context(merged_vars))
+        effective_runtime = runbook.runtime
+        if runbook.content_mode == "files":
+            _render_text_files_in_place(runtime_dir, merged_vars)
+            rendered = ""
+        else:
+            rendered = Template(runbook.content).render(**_jinja_render_context(merged_vars))
+            if runbook.type == RunbookType.SCRIPT and _script_uses_system_set_runtime(runbook.content):
+                effective_runtime = str(merged_vars.get("system.set_runtime", ""))
+                rendered = _drop_first_line(rendered)
+            rendered_path.write_text(rendered, encoding="utf-8")
         task.schedule["runtime_dir"] = str(runtime_dir)
         task.schedule["rendered_file"] = str(rendered_path)
+        task.schedule["content_mode"] = runbook.content_mode
+        if runbook.content_mode == "files":
+            task.schedule["entry_file"] = runbook.entry_file
+            task.schedule["files_summary"] = runbook.files_summary
 
         def _log_line(level: str, msg: str) -> None:
             lvl = LogLevel.INFO if level == "info" else LogLevel.ERROR
@@ -591,11 +906,13 @@ def _execute_task(workpiece_name: str, task: TaskRecord) -> TaskRecord:
                 runtime_dir,
                 rendered_path,
                 rendered,
-                runbook.runtime,
+                effective_runtime,
                 merged_vars,
                 settings.task_execution_timeout_seconds,
                 _log_line,
             )
+            if result.command:
+                task.schedule["runtime_command"] = result.command
             task.exit_code = result.exit_code
             if result.exit_code == 0:
                 task.status = TaskStatus.SUCCESS
@@ -621,7 +938,18 @@ def _execute_task(workpiece_name: str, task: TaskRecord) -> TaskRecord:
     return task
 
 
-def _apply_setting_on_task_creation(workpiece_name: str, task: TaskRecord) -> TaskRecord:
+def _execute_task_by_id(workpiece_name: str, task_id: str) -> TaskRecord:
+    task = _load_task(workpiece_name, task_id)
+    if task.status == TaskStatus.CANCELED:
+        return task
+    return _execute_task(workpiece_name, task)
+
+
+def _apply_setting_on_task_creation(
+    workpiece_name: str,
+    task: TaskRecord,
+    background_tasks: BackgroundTasks | None = None,
+) -> TaskRecord:
     setting = _load_setting(workpiece_name)
     manifest = _load_manifest(workpiece_name, task.runbook_name)
     required_inputs = [m for m in manifest if m.direction == ManifestVariableDirection.INPUT and m.required]
@@ -647,6 +975,10 @@ def _apply_setting_on_task_creation(workpiece_name: str, task: TaskRecord) -> Ta
         _save_task(workpiece_name, task)
         return task
     if strategy.action == SettingAction.AUTO_EXECUTE:
+        if background_tasks is not None:
+            _save_task(workpiece_name, task)
+            background_tasks.add_task(_execute_task_by_id, workpiece_name, task.task_id)
+            return task
         return _execute_task(workpiece_name, task)
     _save_task(workpiece_name, task)
     return task
@@ -673,6 +1005,8 @@ def _create_task_from_runbook(
     runbook_name: str,
     variables: dict[str, Any],
     source: TaskSource,
+    background_tasks: BackgroundTasks | None = None,
+    inherited_runtime_dir: Path | None = None,
 ) -> tuple[TaskRecord, list[ManifestVariable], list[str], list[str]]:
     _load_runbook(workpiece_name, runbook_name)
     manifest = _load_manifest(workpiece_name, runbook_name)
@@ -685,7 +1019,7 @@ def _create_task_from_runbook(
         variables=dict(variables),
         status=TaskStatus.PENDING if (missing or unknown) else TaskStatus.READY,
         error_summary="",
-        schedule={},
+        schedule={"inherited_runtime_dir": str(inherited_runtime_dir)} if inherited_runtime_dir is not None else {},
         created_at=_utc_now(),
         updated_at=_utc_now(),
     )
@@ -694,7 +1028,7 @@ def _create_task_from_runbook(
     elif missing:
         task.error_summary = "missing required input variables"
     _save_task(workpiece_name, task)
-    task = _apply_setting_on_task_creation(workpiece_name, task)
+    task = _apply_setting_on_task_creation(workpiece_name, task, background_tasks)
     return task, manifest, missing, unknown
 
 
@@ -949,6 +1283,9 @@ async def list_runbooks(workpiece_name: str) -> dict[str, list[dict[str, Any]]]:
                 "name": rb.name,
                 "type": rb.type.value,
                 "description": rb.description,
+                "content_mode": rb.content_mode,
+                "entry_file": rb.entry_file,
+                "files_summary": rb.files_summary,
                 "created_at": rb.created_at,
                 "updated_at": rb.updated_at,
                 "manifest_summary": {"variables": len(manifest)},
@@ -957,8 +1294,24 @@ async def list_runbooks(workpiece_name: str) -> dict[str, list[dict[str, Any]]]:
     return {"items": items}
 
 
-@app.post("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}", status_code=201)
-async def upsert_runbook(workpiece_name: str, runbook_name: str, body: RunbookUpsertRequest) -> dict[str, Any]:
+def _parse_manifest_field(raw: str | None) -> list[ManifestVariable] | None:
+    if not raw or not raw.strip():
+        return None
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"manifest must be valid JSON: {exc}") from exc
+    if isinstance(payload, dict) and "items" in payload:
+        payload = payload["items"]
+    if not isinstance(payload, list):
+        raise HTTPException(status_code=422, detail="manifest must be a JSON array")
+    try:
+        return [ManifestVariable.model_validate(item) for item in payload]
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail={"message": "manifest item validation failed", "errors": exc.errors()}) from exc
+
+
+def _upsert_inline_runbook(workpiece_name: str, runbook_name: str, body: RunbookUpsertRequest) -> dict[str, Any]:
     _load_meta(workpiece_name)
     exists = _runbook_exists(workpiece_name, runbook_name)
     now = _utc_now()
@@ -970,20 +1323,82 @@ async def upsert_runbook(workpiece_name: str, runbook_name: str, body: RunbookUp
     if body.type == RunbookType.WORKFLOW:
         _validate_workflow_references(workpiece_name, runbook_name, body.content)
     _validate_runbook_manifest_on_create(body.content, body.manifest)
+    template_vars = _combined_template_var_names(body.content, include_all_system=True)
+    merged_manifest = _normalize_manifest(template_vars, body.manifest)
     runbook = RunbookRecord(
         name=runbook_name,
         type=body.type,
         description=body.description,
         content=body.content,
         runtime=body.runtime,
+        content_mode="inline",
+        entry_file=None,
+        files_summary={},
         created_at=old_created_at,
         updated_at=now,
     )
     _save_runbook(workpiece_name, runbook)
-    template_vars = _combined_template_var_names(body.content)
-    merged_manifest = _normalize_manifest(template_vars, body.manifest)
+    _delete_runbook_file_package(workpiece_name, runbook_name)
     _save_manifest(workpiece_name, runbook_name, merged_manifest)
     return _runbook_payload(workpiece_name, runbook)
+
+
+async def _upsert_file_package_runbook(workpiece_name: str, runbook_name: str, request: Request) -> dict[str, Any]:
+    _load_meta(workpiece_name)
+    fields, files = await _uploaded_package_files(request)
+    raw_type = fields.get("type", "Terraform")
+    try:
+        runbook_type = RunbookType(raw_type)
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in RunbookType)
+        raise HTTPException(status_code=422, detail=f"invalid runbook type: {raw_type}. allowed: {allowed}") from exc
+    if runbook_type != RunbookType.TERRAFORM:
+        raise HTTPException(status_code=422, detail="文件包 runbook 初期仅支持 Terraform 类型")
+    manifest = _parse_manifest_field(fields.get("manifest"))
+    _validate_manifest_on_create(manifest)
+    description = fields.get("description", "")
+    runtime = fields.get("runtime") or None
+    entry_file = _select_entry_file(files, fields.get("entry_file"))
+    exists = _runbook_exists(workpiece_name, runbook_name)
+    now = _utc_now()
+    old_created_at = _load_runbook(workpiece_name, runbook_name).created_at if exists else now
+
+    runbook = RunbookRecord(
+        name=runbook_name,
+        type=runbook_type,
+        description=description,
+        content="",
+        runtime=runtime,
+        content_mode="files",
+        entry_file=entry_file,
+        files_summary=_files_summary(files),
+        created_at=old_created_at,
+        updated_at=now,
+    )
+    template_vars = _uploaded_package_template_vars(files, include_all_system=True)
+    merged_manifest = _normalize_manifest(template_vars, manifest)
+    _replace_runbook_file_package(workpiece_name, runbook_name, files)
+    _save_runbook(workpiece_name, runbook)
+    _save_manifest(workpiece_name, runbook_name, merged_manifest)
+    return _runbook_payload(workpiece_name, runbook)
+
+
+@app.post("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}", status_code=201)
+async def upsert_runbook(workpiece_name: str, runbook_name: str, request: Request) -> dict[str, Any]:
+    content_type = request.headers.get("content-type", "").lower()
+    if content_type.startswith("multipart/form-data") or content_type.startswith("application/x-www-form-urlencoded"):
+        return await _upsert_file_package_runbook(workpiece_name, runbook_name, request)
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid JSON body: {exc.msg}") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=f"invalid JSON body: {exc}") from exc
+    try:
+        body = RunbookUpsertRequest.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    return _upsert_inline_runbook(workpiece_name, runbook_name, body)
 
 
 @app.get("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}")
@@ -1002,6 +1417,7 @@ async def delete_runbook(workpiece_name: str, runbook_name: str) -> Response:
     manifest = _manifest_path(workpiece_name, runbook_name)
     runbook.unlink(missing_ok=True)
     manifest.unlink(missing_ok=True)
+    _delete_runbook_file_package(workpiece_name, runbook_name)
     return Response(status_code=204)
 
 
@@ -1017,24 +1433,31 @@ async def get_runbook_manifest(workpiece_name: str, runbook_name: str) -> dict[s
 async def upsert_runbook_manifest(workpiece_name: str, runbook_name: str, body: ManifestUpsertRequest) -> dict[str, Any]:
     _load_meta(workpiece_name)
     runbook = _load_runbook(workpiece_name, runbook_name)
-    for incoming in body.manifest:
-        if incoming.name in SYSTEM_RESERVED_NAMES:
-            raise HTTPException(status_code=422, detail="禁止在 manifest 中声明系统保留变量")
     names = [m.name for m in body.manifest]
     dups = detect_duplicate_names(names)
     if dups:
         raise HTTPException(status_code=422, detail=f"manifest 变量重复声明: {', '.join(dups)}")
-    vars_from_template = _combined_template_var_names(runbook.content)
+    if runbook.content_mode == "files":
+        vars_from_template = _file_package_template_vars(workpiece_name, runbook_name, include_all_system=True)
+    else:
+        vars_from_template = _combined_template_var_names(runbook.content, include_all_system=True)
     current = {item.name: item for item in _load_manifest(workpiece_name, runbook_name)}
     for incoming in body.manifest:
+        if incoming.name in SYSTEM_RESERVED_NAMES and incoming.name not in vars_from_template:
+            raise HTTPException(status_code=422, detail="禁止在 manifest 中声明未知系统保留变量")
         current[incoming.name] = incoming
-    merged = _normalize_manifest(vars_from_template, list(current.values()))
+    merged = _normalize_manifest(vars_from_template, list(current.values()), allow_extra_user_vars=True)
     _save_manifest(workpiece_name, runbook_name, merged)
     return {"items": [m.model_dump() for m in merged]}
 
 
 @app.post("/api/workpieces/{workpiece_name}/runbooks/{runbook_name}/trigger")
-async def trigger_runbook(workpiece_name: str, runbook_name: str, body: TriggerRequest) -> dict[str, Any]:
+async def trigger_runbook(
+    workpiece_name: str,
+    runbook_name: str,
+    body: TriggerRequest,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
     _load_meta(workpiece_name)
     _load_runbook(workpiece_name, runbook_name)
     manifest = _load_manifest(workpiece_name, runbook_name)
@@ -1049,7 +1472,7 @@ async def trigger_runbook(workpiece_name: str, runbook_name: str, body: TriggerR
         )
 
     task, manifest, missing, unknown = _create_task_from_runbook(
-        workpiece_name, runbook_name, body.variables, TaskSource.MANUAL
+        workpiece_name, runbook_name, body.variables, TaskSource.MANUAL, background_tasks
     )
 
     payload = {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
@@ -1101,11 +1524,13 @@ async def update_task_variables(workpiece_name: str, task_id: str, body: TaskVar
 
 
 @app.post("/api/workpieces/{workpiece_name}/tasks/{task_id}/confirm")
-async def confirm_task(workpiece_name: str, task_id: str) -> Response:
+async def confirm_task(workpiece_name: str, task_id: str, background_tasks: BackgroundTasks) -> Response:
     _load_meta(workpiece_name)
     task = _load_task(workpiece_name, task_id)
     if task.status == TaskStatus.CANCELED:
         raise HTTPException(status_code=409, detail="task already canceled")
+    if task.schedule.get("confirmed_at"):
+        raise HTTPException(status_code=409, detail="task already confirmed")
     manifest = _load_manifest(workpiece_name, task.runbook_name)
     missing, unknown, _ = _validate_variables(manifest, task.variables)
     if missing or unknown:
@@ -1117,9 +1542,52 @@ async def confirm_task(workpiece_name: str, task_id: str) -> Response:
                 "manifest": [m.model_dump() for m in manifest],
             },
         )
+    now = _utc_now()
+    task.schedule["confirmed_at"] = now
+    if task.status in {TaskStatus.PENDING, TaskStatus.READY}:
+        task.status = TaskStatus.RUNNING
+    task.updated_at = now
     task.error_summary = ""
-    task = _execute_task(workpiece_name, task)
+    _save_task(workpiece_name, task)
+    background_tasks.add_task(_execute_task_by_id, workpiece_name, task.task_id)
     return Response(content=json.dumps({"task": task.model_dump()}, ensure_ascii=False), status_code=202, media_type="application/json")
+
+
+@app.post("/api/tasks/{task_id}/rerun", status_code=201)
+async def rerun_task(task_id: str, background_tasks: BackgroundTasks, body: TaskRerunRequest | None = None) -> dict[str, Any]:
+    workpiece_name, original = _find_task_workpiece(task_id)
+    variables = {**original.variables, **((body.variables if body is not None else {}) or {})}
+    runbook = _load_runbook(workpiece_name, original.runbook_name)
+    inherited_runtime_dir = None
+    if runbook.type == RunbookType.TERRAFORM:
+        inherited_runtime_dir = Path(str(original.schedule.get("runtime_dir") or _task_runtime_dir(original.task_id)))
+    try:
+        manifest = _load_manifest(workpiece_name, original.runbook_name)
+        _validate_task_variables_against_readonly(manifest, variables)
+        missing, unknown, _ = _validate_variables(manifest, variables)
+        if missing or unknown:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "rerun variables failed validation",
+                    "missing_required": missing,
+                    "unknown_variables": unknown,
+                    "manifest": [m.model_dump() for m in manifest],
+                },
+            )
+        task, manifest, missing, unknown = _create_task_from_runbook(
+            workpiece_name,
+            original.runbook_name,
+            variables,
+            original.source,
+            background_tasks,
+            inherited_runtime_dir,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 422:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+        raise
+    return {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
 
 
 @app.post("/api/workpieces/{workpiece_name}/tasks/{task_id}/cancel")

@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from jinja2 import Template
+
 from autoopshub.runtime_commands import check_command_available, check_tokens_available
 from autoopshub.settings import AppSettings
 
@@ -23,6 +25,54 @@ LogFn = Callable[[str, str], None]  # level, message
 class ExecResult:
     exit_code: int
     error_summary: str
+    command: list[str] | None = None
+
+
+def _runtime_template_context(variables: dict[str, Any]) -> dict[str, Any]:
+    context = dict(variables)
+    system_vars = {
+        key.split(".", 1)[1]: value
+        for key, value in variables.items()
+        if key.startswith("system.") and "." in key
+    }
+    if system_vars:
+        context["system"] = system_vars
+        for key, value in system_vars.items():
+            context.setdefault(key, value)
+    return context
+
+
+def build_runtime_override_argv(command_template: str | None, variables: dict[str, Any]) -> list[str] | None:
+    if not command_template or not command_template.strip():
+        return None
+    rendered = Template(command_template).render(**_runtime_template_context(variables)).strip()
+    if not rendered:
+        return None
+    return shlex.split(rendered, posix=os.name != "nt")
+
+
+def _is_terraform_cli(argv: list[str], terraform_bin: str) -> bool:
+    if not argv:
+        return False
+    command = Path(argv[0]).name.lower()
+    configured = Path(terraform_bin).name.lower()
+    return command == configured or command == "terraform"
+
+
+def _split_terraform_chdir(argv: list[str]) -> tuple[list[str], list[str]]:
+    chdir_flags = [token for token in argv[1:] if token.startswith("-chdir=")]
+    rest = [argv[0], *[token for token in argv[1:] if not token.startswith("-chdir=")]]
+    return chdir_flags, rest
+
+
+def normalize_terraform_override_argv(argv: list[str], terraform_bin: str) -> tuple[list[str], list[str] | None]:
+    if not _is_terraform_cli(argv, terraform_bin):
+        return argv, None
+    chdir_flags, rest = _split_terraform_chdir(argv)
+    normalized = [rest[0], *chdir_flags, *rest[1:]]
+    subcommand = next((token for token in rest[1:] if not token.startswith("-")), "")
+    init_argv = None if subcommand == "init" else [rest[0], *chdir_flags, "init", "-input=false"]
+    return normalized, init_argv
 
 
 def _stream_reader(stream: Any, level: str, log: LogFn) -> None:
@@ -68,11 +118,11 @@ def run_subprocess_with_logging(
         except Exception:
             pass
         log("error", f"runtime 执行超时（{timeout_sec}s），进程已终止")
-        return ExecResult(124, "runtime execution timeout")
+        return ExecResult(124, "runtime execution timeout", argv)
     t_out.join(timeout=2)
     t_err.join(timeout=2)
     summary = "" if exit_code == 0 else f"命令退出码 {exit_code}: {' '.join(argv)}"
-    return ExecResult(int(exit_code), summary)
+    return ExecResult(int(exit_code), summary, argv)
 
 
 def _parse_script_command_from_first_line(rendered_text: str) -> str | None:
@@ -123,18 +173,37 @@ def run_terraform(
     rendered_path: Path,
     timeout_sec: int,
     log: LogFn,
+    override_argv: list[str] | None = None,
 ) -> ExecResult:
+    terraform_cwd = rendered_path.parent if rendered_path.suffix == ".tf" else cwd
+    if rendered_path.suffix != ".tf":
+        target = cwd / "main.tf"
+        try:
+            same_target = target.resolve() == rendered_path.resolve()
+        except FileNotFoundError:
+            same_target = False
+        if not same_target:
+            target.write_bytes(rendered_path.read_bytes())
+    if override_argv:
+        chk = check_tokens_available(override_argv)
+        if not chk.ok:
+            log("error", chk.message)
+            return ExecResult(127, chk.message, override_argv)
+        normalized_argv, init_argv = normalize_terraform_override_argv(override_argv, settings.runtime_commands.terraform_bin)
+        if init_argv:
+            r1 = run_subprocess_with_logging(init_argv, terraform_cwd, None, timeout_sec // 2 or 30, log)
+            if r1.exit_code != 0:
+                return r1
+        return run_subprocess_with_logging(normalized_argv, terraform_cwd, None, timeout_sec, log)
     tf = settings.runtime_commands.terraform_bin
     chk = check_command_available(tf)
     if not chk.ok:
         log("error", chk.message)
-        return ExecResult(127, chk.message)
-    target = cwd / "main.tf"
-    target.write_bytes(rendered_path.read_bytes())
-    r1 = run_subprocess_with_logging([tf, "init", "-input=false"], cwd, None, timeout_sec // 2 or 30, log)
+        return ExecResult(127, chk.message, [tf])
+    r1 = run_subprocess_with_logging([tf, "init", "-input=false"], terraform_cwd, None, timeout_sec // 2 or 30, log)
     if r1.exit_code != 0:
         return r1
-    return run_subprocess_with_logging([tf, "apply", "-input=false", "-auto-approve"], cwd, None, timeout_sec, log)
+    return run_subprocess_with_logging([tf, "apply", "-input=false", "-auto-approve"], terraform_cwd, None, timeout_sec, log)
 
 
 def run_ansible(
@@ -144,12 +213,19 @@ def run_ansible(
     inventory_path: str | None,
     timeout_sec: int,
     log: LogFn,
+    override_argv: list[str] | None = None,
 ) -> ExecResult:
+    if override_argv:
+        chk = check_tokens_available(override_argv)
+        if not chk.ok:
+            log("error", chk.message)
+            return ExecResult(127, chk.message, override_argv)
+        return run_subprocess_with_logging(override_argv, cwd, None, timeout_sec, log)
     ap = settings.runtime_commands.ansible_playbook_bin
     chk = check_command_available(ap)
     if not chk.ok:
         log("error", chk.message)
-        return ExecResult(127, chk.message)
+        return ExecResult(127, chk.message, [ap])
     inv = inventory_path or str(cwd / "inventory.ini")
     Path(inv).parent.mkdir(parents=True, exist_ok=True)
     if not Path(inv).exists():
@@ -173,7 +249,7 @@ def run_script(
     chk = check_tokens_available(argv)
     if not chk.ok:
         log("error", chk.message)
-        return ExecResult(127, chk.message)
+        return ExecResult(127, chk.message, argv)
     return run_subprocess_with_logging(argv, cwd, None, timeout_sec, log)
 
 
@@ -189,12 +265,13 @@ def dispatch_execution(
     log: LogFn,
 ) -> ExecResult:
     rt = runbook_type
+    override_argv = build_runtime_override_argv(str(variables.get("system.set_runtime", "")), variables)
     if rt == "Terraform":
-        return run_terraform(settings, cwd, rendered_path, timeout_sec, log)
+        return run_terraform(settings, cwd, rendered_path, timeout_sec, log, override_argv)
     if rt == "Ansible":
         inv = variables.get("system.inventory_file")
         inv_s = str(inv) if inv is not None else None
-        return run_ansible(settings, cwd, rendered_path, inv_s, timeout_sec, log)
+        return run_ansible(settings, cwd, rendered_path, inv_s, timeout_sec, log, override_argv)
     if rt == "Script":
         return run_script(settings, cwd, rendered_path, rendered_text, runbook_runtime, timeout_sec, log)
     # Workflow 等：不执行外部命令

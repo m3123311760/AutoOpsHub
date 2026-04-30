@@ -1,0 +1,33 @@
+# 本地开发与手动验证依赖（非生产编排方案）
+services:
+  mysql:
+    image: mysql:${AUTOOPSHUB_MYSQL_IMAGE_TAG:-8.0}
+    environment:
+      MYSQL_ROOT_PASSWORD: ${AUTOOPSHUB_MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${AUTOOPSHUB_MYSQL_DATABASE:-autoopshub}
+      MYSQL_USER: ${AUTOOPSHUB_MYSQL_USER:-autoopshub}
+      MYSQL_PASSWORD: ${AUTOOPSHUB_MYSQL_PASSWORD:-autoopshub}
+    ports:
+      - "${AUTOOPSHUB_MYSQL_PORT:-3306}:3306"
+    volumes:
+      - ./databases-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:${AUTOOPSHUB_REDIS_IMAGE_TAG:-7-alpine}
+    ports:
+      - "${AUTOOPSHUB_REDIS_PORT:-6379}:6379"
+
+  openldap:
+    image: osixia/openldap:${AUTOOPSHUB_OPENLDAP_IMAGE_TAG:-1.5.0}
+    environment:
+      LDAP_ORGANISATION: ${AUTOOPSHUB_LDAP_ORGANISATION:-AutoOpsHub}
+      LDAP_DOMAIN: ${AUTOOPSHUB_LDAP_DOMAIN:-example.org}
+      LDAP_ADMIN_PASSWORD: ${AUTOOPSHUB_LDAP_ADMIN_PASSWORD:-admin}
+    ports:
+      - "${AUTOOPSHUB_LDAP_PORT:-389}:389"
+    command: ["--copy-service"]

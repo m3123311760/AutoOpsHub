@@ -13,6 +13,8 @@ import {
   RefreshCw,
   Eye,
   X,
+  Terminal,
+  RotateCcw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -28,7 +30,9 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
-import { taskApi, type TaskSummary, type Task } from "@/lib/api";
+import { TaskLogPanel, TaskLogDialog } from "@/components/task-log-viewer";
+import { TaskParameterDialog } from "@/components/task-parameter-dialog";
+import { runbookApi, taskApi, type ManifestVariable, type TaskSummary, type Task } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 
 interface TasksContentProps {
@@ -43,6 +47,12 @@ export function TasksContent({ workpiece }: TasksContentProps) {
   );
 
   const [detailOpen, setDetailOpen] = useState(false);
+  const [logOpen, setLogOpen] = useState(false);
+  const [rerunOpen, setRerunOpen] = useState(false);
+  const [logTask, setLogTask] = useState<Task | null>(null);
+  const [rerunTask, setRerunTask] = useState<Task | null>(null);
+  const [rerunManifest, setRerunManifest] = useState<ManifestVariable[]>([]);
+  const [rerunError, setRerunError] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -60,6 +70,54 @@ export function TasksContent({ workpiece }: TasksContentProps) {
       setDetailOpen(true);
     } catch (err) {
       console.error("加载任务详情失败:", err);
+    }
+  };
+
+  const openTaskLog = async (taskId: string) => {
+    try {
+      const task = await taskApi.get(workpiece, taskId);
+      setLogTask(task);
+      setLogOpen(true);
+    } catch (err) {
+      console.error("加载任务日志失败:", err);
+    }
+  };
+
+  const openRerunDialog = async (taskId: string) => {
+    setIsSubmitting(true);
+    setRerunError("");
+    setRerunManifest([]);
+    try {
+      const task = await taskApi.get(workpiece, taskId);
+      const manifest = await runbookApi.getManifest(workpiece, task.runbook_name);
+      setRerunTask(task);
+      setRerunManifest(manifest.items);
+      setRerunOpen(true);
+    } catch (err) {
+      console.error("加载重新运行参数失败:", err);
+      setRerunError(err instanceof Error ? err.message : "加载重新运行参数失败");
+      setRerunOpen(true);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRerun = async (variables: Record<string, unknown>) => {
+    if (!rerunTask) return;
+    setIsSubmitting(true);
+    setRerunError("");
+    setLogTask(null);
+    setLogOpen(true);
+    try {
+      const response = await taskApi.rerun(rerunTask.task_id, variables);
+      setRerunOpen(false);
+      mutate(`tasks-${workpiece}`);
+      setLogTask(response.task);
+    } catch (err) {
+      console.error("重新运行失败:", err);
+      setRerunError(err instanceof Error ? err.message : "重新运行失败");
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -176,14 +234,32 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                       </div>
                     </div>
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => loadTaskDetail(task.task_id)}
-                  >
-                    <Eye className="mr-2 h-4 w-4" />
-                    查看
-                  </Button>
+                  <div className="flex items-center gap-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openRerunDialog(task.task_id)}
+                    >
+                      <RotateCcw className="mr-2 h-4 w-4" />
+                      重跑
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => openTaskLog(task.task_id)}
+                    >
+                      <Terminal className="mr-2 h-4 w-4" />
+                      日志
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => loadTaskDetail(task.task_id)}
+                    >
+                      <Eye className="mr-2 h-4 w-4" />
+                      查看
+                    </Button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -193,7 +269,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
       {/* Task Detail Dialog */}
       <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="grid max-h-[92vh] max-w-[min(1120px,calc(100vw-2rem))] grid-rows-[auto_minmax(0,1fr)_auto]">
           <DialogHeader>
             <DialogTitle>任务详情</DialogTitle>
             <DialogDescription>
@@ -201,13 +277,14 @@ export function TasksContent({ workpiece }: TasksContentProps) {
             </DialogDescription>
           </DialogHeader>
           {selectedTask && (
-            <Tabs defaultValue="info" className="w-full">
+            <Tabs defaultValue="info" className="min-h-0 w-full overflow-hidden">
               <TabsList>
                 <TabsTrigger value="info">基本信息</TabsTrigger>
                 <TabsTrigger value="variables">变量</TabsTrigger>
                 <TabsTrigger value="schedule">调度信息</TabsTrigger>
+                <TabsTrigger value="logs">日志</TabsTrigger>
               </TabsList>
-              <TabsContent value="info" className="space-y-4">
+              <TabsContent value="info" className="max-h-[62vh] space-y-4 overflow-auto pr-2">
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <Label>状态</Label>
@@ -263,15 +340,18 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                   </div>
                 )}
               </TabsContent>
-              <TabsContent value="variables">
+              <TabsContent value="variables" className="max-h-[62vh] overflow-auto">
                 <pre className="rounded-lg bg-secondary p-4 text-sm overflow-auto max-h-64">
                   {JSON.stringify(selectedTask.variables, null, 2)}
                 </pre>
               </TabsContent>
-              <TabsContent value="schedule">
+              <TabsContent value="schedule" className="max-h-[62vh] overflow-auto">
                 <pre className="rounded-lg bg-secondary p-4 text-sm overflow-auto max-h-64">
                   {JSON.stringify(selectedTask.schedule, null, 2)}
                 </pre>
+              </TabsContent>
+              <TabsContent value="logs" className="min-h-0">
+                <TaskLogPanel workpiece={workpiece} taskId={selectedTask.task_id} initialTask={selectedTask} />
               </TabsContent>
             </Tabs>
           )}
@@ -307,6 +387,27 @@ export function TasksContent({ workpiece }: TasksContentProps) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <TaskLogDialog
+        open={logOpen}
+        onOpenChange={setLogOpen}
+        workpiece={workpiece}
+        taskId={logTask?.task_id || null}
+        initialTask={logTask}
+      />
+
+      <TaskParameterDialog
+        open={rerunOpen}
+        onOpenChange={setRerunOpen}
+        title="重新运行任务"
+        description={rerunTask ? `基于任务 ${rerunTask.task_id} 重新运行 ${rerunTask.runbook_name}` : "加载历史任务参数"}
+        manifestItems={rerunManifest}
+        initialValues={rerunTask?.variables}
+        submitLabel="重新运行"
+        isSubmitting={isSubmitting}
+        errorText={rerunError}
+        onSubmit={handleRerun}
+      />
     </div>
   );
 }

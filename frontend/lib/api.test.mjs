@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { readFileSync } from "node:fs";
 
 const captured = [];
 let nextResponse = null;
@@ -16,7 +17,9 @@ globalThis.fetch = async (url, options) => {
 };
 
 const { authApi, jobApi, runbookApi, taskApi, workpieceApi } = await import("./api.ts");
+const { stripAnsi } = await import("./ansi.ts");
 const { safeLoginRedirectTarget } = await import("./auth-routes.ts");
+const { buildInitialManifestValues, collectManifestInputVariables, parseJsonVariableText } = await import("./manifest-form.ts");
 const { recentTasks, workpieceHref, workpieceRouteParam } = await import("./routes.ts");
 
 afterEach(() => {
@@ -29,6 +32,8 @@ test("API clients encode dynamic path segments", async () => {
   await workpieceApi.create("team #1?", "demo");
   await runbookApi.get("team #1?", "deploy/prod?");
   await taskApi.getLogs("team #1?", "task#1?");
+  await taskApi.rerun("task#1?", { region: "west" });
+  await taskApi.getLogs("team #1?", "task#1?", { after: 500, limit: 500 });
   await jobApi.update("team #1?", "nightly#1?", {
     cron: "0 0 * * *",
     enabled: false,
@@ -45,6 +50,14 @@ test("API clients encode dynamic path segments", async () => {
   );
   assert.equal(
     captured[3].url,
+    "http://localhost:8000/api/tasks/task%231%3F/rerun"
+  );
+  assert.equal(
+    captured[4].url,
+    "http://localhost:8000/api/workpieces/team%20%231%3F/tasks/task%231%3F/logs?after=500&limit=500"
+  );
+  assert.equal(
+    captured[5].url,
     "http://localhost:8000/api/workpieces/team%20%231%3F/jobs/nightly%231%3F"
   );
 });
@@ -55,6 +68,40 @@ test("fetcher only sends JSON content type when a body is present", async () => 
 
   assert.equal(captured[0].options.headers["Content-Type"], undefined);
   assert.equal(captured[1].options.headers["Content-Type"], "application/json");
+});
+
+test("runbook API can submit multipart file package upserts without JSON content type", async () => {
+  const file = new File(["resource {}"], "main.tf", { type: "text/plain" });
+
+  await runbookApi.upsertFiles("team", "tf-package", {
+    type: "Terraform",
+    description: "multi",
+    entry_file: "main.tf",
+    files: [file],
+  });
+
+  assert.equal(
+    captured[0].url,
+    "http://localhost:8000/api/workpieces/team/runbooks/tf-package"
+  );
+  assert.equal(captured[0].options.method, "POST");
+  assert.equal(captured[0].options.headers["Content-Type"], undefined);
+  assert.equal(captured[0].options.body instanceof FormData, true);
+});
+
+test("runbook file package picker enables directory selection to preserve relative paths", () => {
+  const source = readFileSync(new URL("../components/runbooks-content.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /webkitdirectory/);
+  assert.match(source, /\bdirectory\b/);
+});
+
+test("task log viewer polls incrementally from cached log sequence", () => {
+  const source = readFileSync(new URL("../components/task-log-viewer.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /logCacheRef/);
+  assert.match(source, /items\.reduce\(\(max, item\) => Math\.max\(max, item\.log_seq\), 0\)/);
+  assert.doesNotMatch(source, /let after = 0;/);
 });
 
 test("auth API clients cover login and API key management", async () => {
@@ -177,4 +224,41 @@ test("recent tasks are sorted by creation time before limiting", () => {
     recentTasks(tasks, 2).map((task) => task.task_id),
     ["newest", "middle"]
   );
+});
+
+test("manifest form helpers initialize defaults and collect editable input variables", () => {
+  const manifest = [
+    { name: "environment", direction: "input", default_value: "local" },
+    { name: "system.host", direction: "input", default_value: "localhost" },
+    { name: "system.set_runtime", direction: "input", default_value: "terraform apply" },
+    { name: "system.output", direction: "output", default_value: "" },
+  ];
+
+  const values = buildInitialManifestValues(manifest);
+  values["system.set_runtime"] = "";
+  assert.deepEqual(values, {
+    environment: "local",
+    "system.host": "localhost",
+    "system.set_runtime": "",
+    "system.output": "",
+  });
+
+  assert.deepEqual(collectManifestInputVariables(manifest, values), {
+    environment: "local",
+    "system.host": "localhost",
+    "system.set_runtime": "",
+  });
+});
+
+test("manifest form helper reports malformed fallback JSON as a validation error", () => {
+  assert.deepEqual(parseJsonVariableText('{"region":"west"}'), { region: "west" });
+  assert.throws(() => parseJsonVariableText('{"region":'), /有效 JSON/);
+});
+
+test("stripAnsi removes terminal color and style escape sequences", () => {
+  assert.equal(
+    stripAnsi("\u001b[0m\u001b[1mInitializing the backend...\u001b[0m"),
+    "Initializing the backend..."
+  );
+  assert.equal(stripAnsi("  \u001b[32m+\u001b[0m create"), "  + create");
 });

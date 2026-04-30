@@ -1,0 +1,58 @@
+services:
+  mysql:
+    image: mysql:${AUTOOPSHUB_MYSQL_IMAGE_TAG:-8.0}
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${AUTOOPSHUB_MYSQL_ROOT_PASSWORD:-root}
+      MYSQL_DATABASE: ${AUTOOPSHUB_MYSQL_DATABASE:-autoopshub}
+      MYSQL_USER: ${AUTOOPSHUB_MYSQL_USER:-autoopshub}
+      MYSQL_PASSWORD: ${AUTOOPSHUB_MYSQL_PASSWORD:-autoopshub}
+    ports:
+      - "${AUTOOPSHUB_MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ../databases-init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mysqladmin ping -h localhost -u${AUTOOPSHUB_MYSQL_USER:-autoopshub} -p${AUTOOPSHUB_MYSQL_PASSWORD:-autoopshub}",
+        ]
+      interval: ${AUTOOPSHUB_MYSQL_HEALTH_INTERVAL:-10s}
+      timeout: ${AUTOOPSHUB_MYSQL_HEALTH_TIMEOUT:-5s}
+      retries: ${AUTOOPSHUB_MYSQL_HEALTH_RETRIES:-10}
+      start_period: ${AUTOOPSHUB_MYSQL_HEALTH_START_PERIOD:-30s}
+
+  redis:
+    image: redis:${AUTOOPSHUB_REDIS_IMAGE_TAG:-7-alpine}
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "${AUTOOPSHUB_REDIS_APPENDONLY:-yes}"]
+    ports:
+      - "${AUTOOPSHUB_REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: ${AUTOOPSHUB_REDIS_HEALTH_INTERVAL:-10s}
+      timeout: ${AUTOOPSHUB_REDIS_HEALTH_TIMEOUT:-5s}
+      retries: ${AUTOOPSHUB_REDIS_HEALTH_RETRIES:-10}
+
+  openldap:
+    image: osixia/openldap:${AUTOOPSHUB_OPENLDAP_IMAGE_TAG:-1.5.0}
+    restart: unless-stopped
+    environment:
+      LDAP_ORGANISATION: ${AUTOOPSHUB_LDAP_ORGANISATION:-AutoOpsHub}
+      LDAP_DOMAIN: ${AUTOOPSHUB_LDAP_DOMAIN:-example.org}
+      LDAP_ADMIN_PASSWORD: ${AUTOOPSHUB_LDAP_ADMIN_PASSWORD:-admin}
+    ports:
+      - "${AUTOOPSHUB_LDAP_PORT:-389}:389"
+    volumes:
+      - openldap-data:/var/lib/ldap
+      - openldap-config:/etc/ldap/slapd.d
+    command: ["--copy-service"]
+
+volumes:
+  mysql-data:
+  redis-data:
+  openldap-data:
+  openldap-config:

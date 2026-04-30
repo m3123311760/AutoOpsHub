@@ -93,6 +93,15 @@ class APIKeySettings:
 
 
 @dataclass
+class RunbookUploadSettings:
+    """Runbook 文件包上传限制。"""
+
+    max_files: int = field(default_factory=lambda: _env_int("AUTOOPSHUB_RUNBOOK_UPLOAD_MAX_FILES", 100))
+    max_file_bytes: int = field(default_factory=lambda: _env_int("AUTOOPSHUB_RUNBOOK_UPLOAD_MAX_FILE_BYTES", 2 * 1024 * 1024))
+    max_total_bytes: int = field(default_factory=lambda: _env_int("AUTOOPSHUB_RUNBOOK_UPLOAD_MAX_TOTAL_BYTES", 20 * 1024 * 1024))
+
+
+@dataclass
 class AppSettings:
     """聚合配置。"""
 
@@ -106,6 +115,7 @@ class AppSettings:
     ad: ADSettings = field(default_factory=ADSettings)
     jwt: JWTSettings = field(default_factory=JWTSettings)
     api_key: APIKeySettings = field(default_factory=APIKeySettings)
+    runbook_upload: RunbookUploadSettings = field(default_factory=RunbookUploadSettings)
     require_auth: bool = field(default_factory=lambda: _env_bool("AUTOOPSHUB_REQUIRE_AUTH", True))
 
     def public_dict(self) -> dict[str, Any]:

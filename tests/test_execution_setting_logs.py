@@ -40,7 +40,7 @@ def test_setting_auto_execute_and_render_to_tmp():
 
     trig = client.post("/api/workpieces/exec-wp/runbooks/rb/trigger", json={"variables": {}})
     assert trig.status_code == 201
-    task = trig.json()["task"]
+    task = client.get(f"/api/workpieces/exec-wp/tasks/{trig.json()['task']['task_id']}").json()
     assert task["status"] == "success"
     assert task["schedule"]["runtime_dir"].startswith(str(Path(tempfile.gettempdir())))
     assert ".autoopshub" not in task["schedule"]["runtime_dir"]
@@ -61,7 +61,7 @@ def test_system_reserved_variables_render_as_nested_jinja_context():
 
     trig = client.post("/api/workpieces/exec-system-wp/runbooks/rb-system/trigger", json={"variables": {}})
     assert trig.status_code == 201
-    task = trig.json()["task"]
+    task = client.get(f"/api/workpieces/exec-system-wp/tasks/{trig.json()['task']['task_id']}").json()
     rendered_file = Path(task["schedule"]["rendered_file"])
     rendered = rendered_file.read_text(encoding="utf-8")
 

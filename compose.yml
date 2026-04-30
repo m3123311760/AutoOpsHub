@@ -1,0 +1,3 @@
+include:
+  - ./compose/infra.yml
+  - ./compose/frontend.yml
