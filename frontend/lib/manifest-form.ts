@@ -13,7 +13,7 @@ export function collectManifestInputVariables(
   return Object.fromEntries(
     manifest
       .filter((item) => item.direction === "input")
-      .filter((item) => values[item.name] !== undefined && String(values[item.name]).trim() !== "")
+      .filter((item) => values[item.name] !== undefined)
       .map((item) => [item.name, values[item.name]])
   );
 }

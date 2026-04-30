@@ -230,19 +230,23 @@ test("manifest form helpers initialize defaults and collect editable input varia
   const manifest = [
     { name: "environment", direction: "input", default_value: "local" },
     { name: "system.host", direction: "input", default_value: "localhost" },
+    { name: "system.set_runtime", direction: "input", default_value: "terraform apply" },
     { name: "system.output", direction: "output", default_value: "" },
   ];
 
   const values = buildInitialManifestValues(manifest);
+  values["system.set_runtime"] = "";
   assert.deepEqual(values, {
     environment: "local",
     "system.host": "localhost",
+    "system.set_runtime": "",
     "system.output": "",
   });
 
   assert.deepEqual(collectManifestInputVariables(manifest, values), {
     environment: "local",
     "system.host": "localhost",
+    "system.set_runtime": "",
   });
 });
 
