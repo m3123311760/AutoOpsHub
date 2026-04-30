@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type InputHTMLAttributes } from "react";
 import useSWR, { mutate } from "swr";
 import {
   BookOpen,
@@ -64,6 +64,13 @@ const typeColors = {
 };
 
 const readonlySystemVariables = new Set(["system.output", "system.runbook_file", "system.runbook_path"]);
+const directoryInputProps = {
+  webkitdirectory: "",
+  directory: "",
+} as InputHTMLAttributes<HTMLInputElement> & {
+  webkitdirectory: string;
+  directory: string;
+};
 
 export function RunbooksContent({ workpiece }: RunbooksContentProps) {
   const { data, error, isLoading } = useSWR(
@@ -324,6 +331,7 @@ export function RunbooksContent({ workpiece }: RunbooksContentProps) {
                           id="files"
                           type="file"
                           multiple
+                          {...directoryInputProps}
                           onChange={(e) => setUploadFiles(Array.from(e.target.files || []))}
                         />
                       </div>

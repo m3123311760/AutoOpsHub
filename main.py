@@ -1287,7 +1287,12 @@ def _upsert_inline_runbook(workpiece_name: str, runbook_name: str, body: Runbook
 async def _upsert_file_package_runbook(workpiece_name: str, runbook_name: str, request: Request) -> dict[str, Any]:
     _load_meta(workpiece_name)
     fields, files = await _uploaded_package_files(request)
-    runbook_type = RunbookType(fields.get("type", "Terraform"))
+    raw_type = fields.get("type", "Terraform")
+    try:
+        runbook_type = RunbookType(raw_type)
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in RunbookType)
+        raise HTTPException(status_code=422, detail=f"invalid runbook type: {raw_type}. allowed: {allowed}") from exc
     if runbook_type != RunbookType.TERRAFORM:
         raise HTTPException(status_code=422, detail="文件包 runbook 初期仅支持 Terraform 类型")
     manifest = _parse_manifest_field(fields.get("manifest"))

@@ -590,6 +590,22 @@ def test_multipart_runbook_create_missing_files_and_path_validation():
     assert item["files_summary"]["count"] == 2
 
 
+def test_multipart_runbook_rejects_invalid_type_with_client_error():
+    error_client = TestClient(app, raise_server_exceptions=False)
+    client.delete("/api/workpieces/file-invalid-type")
+    create_wp = client.post("/api/workpieces/file-invalid-type", json={"description": "files"})
+    assert create_wp.status_code in (201, 409)
+
+    create = error_client.post(
+        "/api/workpieces/file-invalid-type/runbooks/tf-package",
+        data={"type": "Terrafom"},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"x\" {}\n", "text/plain"))],
+    )
+
+    assert create.status_code == 422
+    assert "type" in create.json()["detail"]
+
+
 def test_multipart_runbook_returns_clear_error_when_parser_dependency_is_missing(monkeypatch: pytest.MonkeyPatch):
     client.delete("/api/workpieces/file-parser-missing")
     create_wp = client.post("/api/workpieces/file-parser-missing", json={"description": "files"})

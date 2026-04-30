@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { readFileSync } from "node:fs";
 
 const captured = [];
 let nextResponse = null;
@@ -86,6 +87,13 @@ test("runbook API can submit multipart file package upserts without JSON content
   assert.equal(captured[0].options.method, "POST");
   assert.equal(captured[0].options.headers["Content-Type"], undefined);
   assert.equal(captured[0].options.body instanceof FormData, true);
+});
+
+test("runbook file package picker enables directory selection to preserve relative paths", () => {
+  const source = readFileSync(new URL("../components/runbooks-content.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /webkitdirectory/);
+  assert.match(source, /\bdirectory\b/);
 });
 
 test("auth API clients cover login and API key management", async () => {
