@@ -348,6 +348,34 @@ def test_rerun_task_without_body_uses_original_variables(monkeypatch: pytest.Mon
     assert rerun.json()["task"]["variables"] == {"name": "same"}
 
 
+def test_invalid_rerun_request_does_not_create_orphan_task(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/rerun-invalid")
+    create_wp = client.post("/api/workpieces/rerun-invalid", json={"description": "rerun invalid"})
+    assert create_wp.status_code in (201, 409)
+    create = client.post(
+        "/api/workpieces/rerun-invalid/runbooks/run-script",
+        json={"type": "Script", "content": "echo {{ name }}", "runtime": "bash"},
+    )
+    assert create.status_code == 201
+    monkeypatch.setattr(main, "dispatch_execution", lambda *args, **kwargs: ExecResult(exit_code=0, error_summary=""))
+    original = client.post(
+        "/api/workpieces/rerun-invalid/runbooks/run-script/trigger",
+        json={"variables": {"name": "same"}},
+    )
+    assert original.status_code == 201
+    before = client.get("/api/workpieces/rerun-invalid/tasks").json()["items"]
+
+    rerun = client.post(
+        f"/api/tasks/{original.json()['task']['task_id']}/rerun",
+        json={"variables": {"oops": "bad"}},
+    )
+    after = client.get("/api/workpieces/rerun-invalid/tasks").json()["items"]
+
+    assert rerun.status_code == 400
+    assert rerun.json()["detail"]["unknown_variables"] == ["oops"]
+    assert [item["task_id"] for item in after] == [item["task_id"] for item in before]
+
+
 def test_rerun_terraform_file_package_can_override_runtime_command(monkeypatch: pytest.MonkeyPatch):
     client.delete("/api/workpieces/rerun-terraform")
     create_wp = client.post("/api/workpieces/rerun-terraform", json={"description": "tf rerun"})

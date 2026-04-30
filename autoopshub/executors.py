@@ -175,13 +175,15 @@ def run_terraform(
     log: LogFn,
     override_argv: list[str] | None = None,
 ) -> ExecResult:
-    target = cwd / "main.tf"
-    try:
-        same_target = target.resolve() == rendered_path.resolve()
-    except FileNotFoundError:
-        same_target = False
-    if not same_target:
-        target.write_bytes(rendered_path.read_bytes())
+    terraform_cwd = rendered_path.parent if rendered_path.suffix == ".tf" else cwd
+    if rendered_path.suffix != ".tf":
+        target = cwd / "main.tf"
+        try:
+            same_target = target.resolve() == rendered_path.resolve()
+        except FileNotFoundError:
+            same_target = False
+        if not same_target:
+            target.write_bytes(rendered_path.read_bytes())
     if override_argv:
         chk = check_tokens_available(override_argv)
         if not chk.ok:
@@ -189,19 +191,19 @@ def run_terraform(
             return ExecResult(127, chk.message, override_argv)
         normalized_argv, init_argv = normalize_terraform_override_argv(override_argv, settings.runtime_commands.terraform_bin)
         if init_argv:
-            r1 = run_subprocess_with_logging(init_argv, cwd, None, timeout_sec // 2 or 30, log)
+            r1 = run_subprocess_with_logging(init_argv, terraform_cwd, None, timeout_sec // 2 or 30, log)
             if r1.exit_code != 0:
                 return r1
-        return run_subprocess_with_logging(normalized_argv, cwd, None, timeout_sec, log)
+        return run_subprocess_with_logging(normalized_argv, terraform_cwd, None, timeout_sec, log)
     tf = settings.runtime_commands.terraform_bin
     chk = check_command_available(tf)
     if not chk.ok:
         log("error", chk.message)
         return ExecResult(127, chk.message, [tf])
-    r1 = run_subprocess_with_logging([tf, "init", "-input=false"], cwd, None, timeout_sec // 2 or 30, log)
+    r1 = run_subprocess_with_logging([tf, "init", "-input=false"], terraform_cwd, None, timeout_sec // 2 or 30, log)
     if r1.exit_code != 0:
         return r1
-    return run_subprocess_with_logging([tf, "apply", "-input=false", "-auto-approve"], cwd, None, timeout_sec, log)
+    return run_subprocess_with_logging([tf, "apply", "-input=false", "-auto-approve"], terraform_cwd, None, timeout_sec, log)
 
 
 def run_ansible(

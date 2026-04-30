@@ -1481,6 +1481,19 @@ async def rerun_task(task_id: str, background_tasks: BackgroundTasks, body: Task
     if runbook.type == RunbookType.TERRAFORM:
         inherited_runtime_dir = Path(str(original.schedule.get("runtime_dir") or _task_runtime_dir(original.task_id)))
     try:
+        manifest = _load_manifest(workpiece_name, original.runbook_name)
+        _validate_task_variables_against_readonly(manifest, variables)
+        missing, unknown, _ = _validate_variables(manifest, variables)
+        if missing or unknown:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "rerun variables failed validation",
+                    "missing_required": missing,
+                    "unknown_variables": unknown,
+                    "manifest": [m.model_dump() for m in manifest],
+                },
+            )
         task, manifest, missing, unknown = _create_task_from_runbook(
             workpiece_name,
             original.runbook_name,
@@ -1493,16 +1506,6 @@ async def rerun_task(task_id: str, background_tasks: BackgroundTasks, body: Task
         if exc.status_code == 422:
             raise HTTPException(status_code=400, detail=exc.detail) from exc
         raise
-    if missing or unknown:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "rerun variables failed validation",
-                "missing_required": missing,
-                "unknown_variables": unknown,
-                "manifest": [m.model_dump() for m in manifest],
-            },
-        )
     return {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
 
 

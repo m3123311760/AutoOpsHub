@@ -228,6 +228,44 @@ def test_empty_system_set_runtime_uses_default_terraform_apply(monkeypatch: pyte
     ]
 
 
+def test_terraform_file_entry_runs_from_entry_directory_without_root_main_copy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[list[str], Path]] = []
+
+    def fake_run(argv, cwd, env, timeout_sec, log):
+        calls.append((argv, cwd))
+        return executors.ExecResult(exit_code=0, error_summary="", command=argv)
+
+    monkeypatch.setattr(executors, "run_subprocess_with_logging", fake_run)
+    monkeypatch.setattr(executors, "check_command_available", lambda command: type("Check", (), {"ok": True, "message": ""})())
+    settings = AppSettings(runtime_commands=RuntimeCommands(terraform_bin="terraform"))
+    runtime_dir = Path(".codex-tmp") / "test-terraform-subdir-entry"
+    entry_dir = runtime_dir / "modules" / "network"
+    entry_dir.mkdir(parents=True, exist_ok=True)
+    rendered_path = entry_dir / "main.tf"
+    rendered_path.write_text("resource \"null_resource\" \"x\" {}\n", encoding="utf-8")
+
+    result = dispatch_execution(
+        settings,
+        "Terraform",
+        runtime_dir,
+        rendered_path,
+        "",
+        None,
+        {"system.set_runtime": ""},
+        30,
+        lambda level, message: None,
+    )
+
+    assert result.exit_code == 0
+    assert calls == [
+        (["terraform", "init", "-input=false"], entry_dir),
+        (["terraform", "apply", "-input=false", "-auto-approve"], entry_dir),
+    ]
+    assert not (runtime_dir / "main.tf").exists()
+
+
 def test_terraform_override_runs_init_and_moves_chdir_before_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list[list[str]] = []
 
