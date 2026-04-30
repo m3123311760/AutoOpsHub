@@ -473,6 +473,64 @@ def test_rerun_terraform_file_package_inherits_previous_runtime_state(monkeypatc
     assert (runtime_dirs[1] / ".terraform" / "providers.lock").read_text(encoding="utf-8") == "provider cache"
 
 
+def test_rerun_terraform_file_package_inherits_subdir_entry_state(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/rerun-terraform-subdir-state")
+    create_wp = client.post("/api/workpieces/rerun-terraform-subdir-state", json={"description": "tf subdir state"})
+    assert create_wp.status_code in (201, 409)
+    create = client.post(
+        "/api/workpieces/rerun-terraform-subdir-state/runbooks/tf",
+        data={"type": "Terraform", "entry_file": "modules/network/main.tf"},
+        files=[
+            ("files", ("modules/network/main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain")),
+            ("files", ("modules/network/vars.tf", b"variable \"name\" {}\n", "text/plain")),
+        ],
+    )
+    assert create.status_code == 201
+
+    runtime_dirs: list[Path] = []
+
+    def fake_dispatch_execution(*args, **kwargs):
+        runtime_dir = Path(args[2])
+        entry_dir = runtime_dir / "modules" / "network"
+        variables = args[6]
+        runtime_dirs.append(runtime_dir)
+        if "apply" in str(variables.get("system.set_runtime", "")):
+            (entry_dir / "terraform.tfstate").write_text('{"resources":[]}', encoding="utf-8")
+            (entry_dir / ".terraform").mkdir()
+            (entry_dir / ".terraform" / "providers.lock").write_text("provider cache", encoding="utf-8")
+            (entry_dir / "old.tf").write_text("removed on package update", encoding="utf-8")
+        else:
+            assert (entry_dir / "terraform.tfstate").read_text(encoding="utf-8") == '{"resources":[]}'
+            assert (entry_dir / ".terraform" / "providers.lock").read_text(encoding="utf-8") == "provider cache"
+        return ExecResult(exit_code=0, error_summary="", command=str(variables.get("system.set_runtime", "")).split())
+
+    monkeypatch.setattr(main, "dispatch_execution", fake_dispatch_execution)
+    original = client.post(
+        "/api/workpieces/rerun-terraform-subdir-state/runbooks/tf/trigger",
+        json={"variables": {"name": "demo", "system.set_runtime": "terraform apply -auto-approve"}},
+    )
+    assert original.status_code == 201
+
+    update = client.post(
+        "/api/workpieces/rerun-terraform-subdir-state/runbooks/tf",
+        data={"type": "Terraform", "entry_file": "modules/network/main.tf"},
+        files=[("files", ("modules/network/main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+    assert update.status_code == 201
+
+    rerun = client.post(
+        f"/api/tasks/{original.json()['task']['task_id']}/rerun",
+        json={"variables": {"system.set_runtime": "terraform destroy -auto-approve"}},
+    )
+
+    assert rerun.status_code == 201
+    assert len(runtime_dirs) == 2
+    entry_dir = runtime_dirs[1] / "modules" / "network"
+    assert (entry_dir / "terraform.tfstate").read_text(encoding="utf-8") == '{"resources":[]}'
+    assert (entry_dir / ".terraform" / "providers.lock").read_text(encoding="utf-8") == "provider cache"
+    assert not (entry_dir / "old.tf").exists()
+
+
 def test_rerun_terraform_file_package_drops_files_removed_from_updated_runbook(monkeypatch: pytest.MonkeyPatch):
     client.delete("/api/workpieces/rerun-terraform-prune")
     create_wp = client.post("/api/workpieces/rerun-terraform-prune", json={"description": "tf rerun prune"})

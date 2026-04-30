@@ -598,7 +598,9 @@ def _prune_inherited_runtime_for_file_package(runtime_dir: Path) -> None:
         if child.name in TERRAFORM_RERUN_STATE_ARTIFACTS:
             continue
         if child.is_dir():
-            shutil.rmtree(child)
+            _prune_inherited_runtime_for_file_package(child)
+            if not any(child.iterdir()):
+                child.rmdir()
         else:
             child.unlink()
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import useSWR, { mutate } from "swr";
 import { AlertTriangle, Loader2, RefreshCw, Terminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -40,14 +41,25 @@ function shouldPoll(task?: Task | null) {
   return !task || !terminalStatuses.has(task.status);
 }
 
-async function fetchTaskLogs(workpiece: string, taskId: string) {
-  const items: LogRecord[] = [];
-  let after = 0;
+function mergeLogs(existing: LogRecord[], incoming: LogRecord[]) {
+  if (incoming.length === 0) return existing;
+  const bySeq = new Map(existing.map((item) => [item.log_seq, item]));
+  for (const item of incoming) {
+    bySeq.set(item.log_seq, item);
+  }
+  return [...bySeq.values()].sort((a, b) => a.log_seq - b.log_seq);
+}
+
+async function fetchTaskLogs(workpiece: string, taskId: string, existing: LogRecord[] = []) {
+  let items = existing;
+  let after = items.reduce((max, item) => Math.max(max, item.log_seq), 0);
   for (let page = 0; page < maxLogPages; page += 1) {
     const response = await taskApi.getLogs(workpiece, taskId, { after, limit: logPageSize });
-    items.push(...response.items);
+    items = mergeLogs(items, response.items);
     if (response.items.length < logPageSize) break;
-    after = Math.max(...response.items.map((item) => item.log_seq));
+    const nextAfter = Math.max(after, ...response.items.map((item) => item.log_seq));
+    if (nextAfter === after) break;
+    after = nextAfter;
   }
   return { items };
 }
@@ -55,6 +67,12 @@ async function fetchTaskLogs(workpiece: string, taskId: string) {
 export function TaskLogPanel({ workpiece, taskId, initialTask }: TaskLogPanelProps) {
   const taskKey = taskId ? ["task-detail", workpiece, taskId] : null;
   const logsKey = taskId ? ["task-logs", workpiece, taskId] : null;
+  const logCacheKey = taskId ? `${workpiece}:${taskId}` : "";
+  const logCacheRef = useRef<{ key: string; items: LogRecord[] }>({ key: "", items: [] });
+
+  useEffect(() => {
+    logCacheRef.current = { key: logCacheKey, items: [] };
+  }, [logCacheKey]);
 
   const { data: task, isLoading: taskLoading } = useSWR(
     taskKey,
@@ -66,9 +84,17 @@ export function TaskLogPanel({ workpiece, taskId, initialTask }: TaskLogPanelPro
   );
   const { data: logs, error: logsError, isLoading: logsLoading } = useSWR(
     logsKey,
-    () => fetchTaskLogs(workpiece, taskId as string),
+    () =>
+      fetchTaskLogs(
+        workpiece,
+        taskId as string,
+        logCacheRef.current.key === logCacheKey ? logCacheRef.current.items : []
+      ),
     {
       refreshInterval: () => (shouldPoll(task) ? 1500 : 0),
+      onSuccess: (data) => {
+        logCacheRef.current = { key: logCacheKey, items: data.items };
+      },
     }
   );
 

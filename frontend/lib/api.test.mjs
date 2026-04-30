@@ -96,6 +96,14 @@ test("runbook file package picker enables directory selection to preserve relati
   assert.match(source, /\bdirectory\b/);
 });
 
+test("task log viewer polls incrementally from cached log sequence", () => {
+  const source = readFileSync(new URL("../components/task-log-viewer.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /logCacheRef/);
+  assert.match(source, /items\.reduce\(\(max, item\) => Math\.max\(max, item\.log_seq\), 0\)/);
+  assert.doesNotMatch(source, /let after = 0;/);
+});
+
 test("auth API clients cover login and API key management", async () => {
   await authApi.getAuthStatus();
   await authApi.login("local", "admin", "secret");
