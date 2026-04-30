@@ -299,7 +299,7 @@ def test_auto_execute_can_be_scheduled_after_trigger_response(monkeypatch: pytes
     assert task.status == main.TaskStatus.READY
     assert scheduled
     assert scheduled[0][1][0] == "auto-bg"
-    assert scheduled[0][1][1].task_id == task.task_id
+    assert scheduled[0][1][1] == task.task_id
 
 
 def test_rerun_task_with_overrides_creates_new_task_and_preserves_original(monkeypatch: pytest.MonkeyPatch):
@@ -619,6 +619,46 @@ def test_system_set_runtime_default_renders_runtime_paths_into_schedule(monkeypa
     assert "--limit" in body["schedule"]["runtime_command"]
     assert "localhost" in body["schedule"]["runtime_command"]
     assert body["schedule"]["rendered_file"] in body["schedule"]["runtime_command"]
+
+
+def test_system_set_runtime_empty_task_value_clears_manifest_default(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/runtime-command-clear")
+    create_wp = client.post("/api/workpieces/runtime-command-clear", json={"description": "runtime clear"})
+    assert create_wp.status_code in (201, 409)
+
+    create = client.post(
+        "/api/workpieces/runtime-command-clear/runbooks/custom-ansible",
+        json={
+            "type": "Ansible",
+            "content": "---\n- hosts: localhost\n  tasks: []\n",
+        },
+    )
+    assert create.status_code == 201
+    manifest = client.get("/api/workpieces/runtime-command-clear/runbooks/custom-ansible/manifest")
+    items = manifest.json()["items"]
+    for item in items:
+        if item["name"] == "system.set_runtime":
+            item["default_value"] = "ansible-playbook -i {{ inventory_file }} {{ runbook_file }}"
+    update = client.post("/api/workpieces/runtime-command-clear/runbooks/custom-ansible/manifest", json={"manifest": items})
+    assert update.status_code == 200
+
+    seen: dict[str, object] = {}
+
+    def fake_dispatch_execution(*args, **kwargs):
+        seen["variables"] = args[6]
+        return ExecResult(exit_code=0, error_summary="", command=["default-ansible"])
+
+    monkeypatch.setattr(main, "dispatch_execution", fake_dispatch_execution)
+
+    trigger = client.post(
+        "/api/workpieces/runtime-command-clear/runbooks/custom-ansible/trigger",
+        json={"variables": {"system.set_runtime": ""}},
+    )
+    assert trigger.status_code == 201
+    confirm = client.post(f"/api/workpieces/runtime-command-clear/tasks/{trigger.json()['task']['task_id']}/confirm")
+
+    assert confirm.status_code == 202
+    assert seen["variables"]["system.set_runtime"] == ""
 
 
 def test_script_system_set_runtime_first_line_is_runtime_not_script_content(monkeypatch: pytest.MonkeyPatch):

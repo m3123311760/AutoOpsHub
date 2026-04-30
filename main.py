@@ -865,7 +865,12 @@ def _execute_task(workpiece_name: str, task: TaskRecord) -> TaskRecord:
         Path(str(merged_vars["system.output"])).mkdir(parents=True, exist_ok=True)
         if not str(merged_vars.get("system.inventory_file", "")).strip():
             merged_vars["system.inventory_file"] = str(runtime_dir / "inventory.ini")
-        set_runtime_template = str(task.variables.get("system.set_runtime") or _manifest_default(manifest, "system.set_runtime"))
+        set_runtime_raw = (
+            task.variables["system.set_runtime"]
+            if "system.set_runtime" in task.variables
+            else _manifest_default(manifest, "system.set_runtime")
+        )
+        set_runtime_template = "" if set_runtime_raw is None else str(set_runtime_raw)
         if set_runtime_template.strip():
             merged_vars["system.set_runtime"] = Template(set_runtime_template).render(**_jinja_render_context(merged_vars))
         effective_runtime = runbook.runtime
@@ -933,6 +938,13 @@ def _execute_task(workpiece_name: str, task: TaskRecord) -> TaskRecord:
     return task
 
 
+def _execute_task_by_id(workpiece_name: str, task_id: str) -> TaskRecord:
+    task = _load_task(workpiece_name, task_id)
+    if task.status == TaskStatus.CANCELED:
+        return task
+    return _execute_task(workpiece_name, task)
+
+
 def _apply_setting_on_task_creation(
     workpiece_name: str,
     task: TaskRecord,
@@ -965,7 +977,7 @@ def _apply_setting_on_task_creation(
     if strategy.action == SettingAction.AUTO_EXECUTE:
         if background_tasks is not None:
             _save_task(workpiece_name, task)
-            background_tasks.add_task(_execute_task, workpiece_name, task)
+            background_tasks.add_task(_execute_task_by_id, workpiece_name, task.task_id)
             return task
         return _execute_task(workpiece_name, task)
     _save_task(workpiece_name, task)
@@ -1537,7 +1549,7 @@ async def confirm_task(workpiece_name: str, task_id: str, background_tasks: Back
     task.updated_at = now
     task.error_summary = ""
     _save_task(workpiece_name, task)
-    background_tasks.add_task(_execute_task, workpiece_name, task)
+    background_tasks.add_task(_execute_task_by_id, workpiece_name, task.task_id)
     return Response(content=json.dumps({"task": task.model_dump()}, ensure_ascii=False), status_code=202, media_type="application/json")
 
 

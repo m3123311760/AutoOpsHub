@@ -134,3 +134,27 @@ def test_confirm_ready_task_is_idempotent_and_queues_execution_once(monkeypatch)
     assert first.status_code == 202
     assert second.status_code == 409
     assert calls == [task_id]
+
+
+def test_confirmed_background_task_does_not_execute_after_cancel(monkeypatch):
+    queued: list[tuple[object, tuple[object, ...], dict[str, object]]] = []
+
+    def capture_background_task(self, func, *args, **kwargs):
+        queued.append((func, args, kwargs))
+
+    monkeypatch.setattr(main.BackgroundTasks, "add_task", capture_background_task)
+    created = client.post(
+        "/api/workpieces/tasks-wp/runbooks/rb-req/trigger",
+        json={"variables": {"required_var": "v1"}},
+    )
+    assert created.status_code == 201
+    task_id = created.json()["task"]["task_id"]
+
+    confirm = client.post(f"/api/workpieces/tasks-wp/tasks/{task_id}/confirm")
+    cancel = client.post(f"/api/workpieces/tasks-wp/tasks/{task_id}/cancel")
+    queued_func, queued_args, queued_kwargs = queued[0]
+    queued_func(*queued_args, **queued_kwargs)
+
+    assert confirm.status_code == 202
+    assert cancel.status_code == 200
+    assert client.get(f"/api/workpieces/tasks-wp/tasks/{task_id}").json()["status"] == "canceled"
