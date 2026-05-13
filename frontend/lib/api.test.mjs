@@ -87,6 +87,7 @@ test("tasks page gates rerun and terraform actions by runbook resolution", () =>
   assert.match(source, /setRerunTask\(null\)/);
   assert.match(source, /setTaskActionError\(err instanceof Error \? err\.message/);
   assert.match(source, /getTaskRunbookType\(task\) === "Terraform"/);
+  assert.match(source, /selectedTask\?\.status === "pending" \|\| selectedTask\?\.status === "ready" \? \(/);
   assert.match(source, /Runbook 已删除/);
   assert.match(source, /确认 Destroy/);
   assert.match(source, /onAction\(task, "plan"\)/);

@@ -451,7 +451,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
             </div>
           )}
           <DialogFooter className="flex flex-wrap gap-2">
-            {(selectedTask?.status === "pending" || selectedTask?.status === "ready") && (
+            {selectedTask?.status === "pending" || selectedTask?.status === "ready" ? (
               <>
                 <Button
                   variant="outline"
@@ -474,17 +474,20 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                   确认执行
                 </Button>
               </>
+            ) : (
+              <>
+                {selectedTask && isTerraformTask(selectedTask) && (
+                  <TerraformActionButtons
+                    task={selectedTask}
+                    isSubmitting={isSubmitting}
+                    onAction={handleTerraformAction}
+                  />
+                )}
+                <Button variant="outline" onClick={() => setDetailOpen(false)}>
+                  关闭
+                </Button>
+              </>
             )}
-            {selectedTask && isTerraformTask(selectedTask) && (
-              <TerraformActionButtons
-                task={selectedTask}
-                isSubmitting={isSubmitting}
-                onAction={handleTerraformAction}
-              />
-            )}
-            <Button variant="outline" onClick={() => setDetailOpen(false)}>
-              关闭
-            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
