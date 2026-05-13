@@ -12,7 +12,7 @@ variable "proxmox_api_token" {
 variable "proxmox_insecure" {
   description = "是否允许自签名证书"
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "default_image_file_id" {
@@ -159,6 +159,13 @@ variable "vms" {
       for _, vm in var.vms : length(vm.disks) >= 1
     ])
     error_message = "每台 VM 至少要声明 1 块磁盘，第 0 块磁盘会作为 qcow2 导入的系统盘。"
+  }
+
+  validation {
+    condition = alltrue([
+      for _, vm in var.vms : length(vm.network_devices) == length(vm.ip_configs)
+    ])
+    error_message = "network_devices 与 ip_configs 必须一一对应，长度必须一致。"
   }
 
   validation {

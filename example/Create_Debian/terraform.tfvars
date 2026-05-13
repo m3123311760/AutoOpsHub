@@ -1,13 +1,14 @@
 proxmox_endpoint  = "{{ proxmox_endpoint | default('https://192.168.0.100:8006/', true) }}"
 proxmox_api_token = "{{ proxmox_api_token | default('CHANGE_ME', true) }}"
-proxmox_insecure  = {{ proxmox_insecure | default('true', true) | lower }}
+proxmox_insecure  = {{ proxmox_insecure | default('false', true) | lower }}
 
 # 全局默认 qcow2 镜像。
 default_image_file_id = "{{ default_image_file_id | default('local:import/debian-12-genericcloud-amd64.qcow2', true) }}"
 
 # 全局默认登录信息。
 default_username = "{{ default_username | default('debian', true) }}"
-default_password = "{{ default_password | default('ChangeMe_123456', true) }}"
+# 默认不提供密码；请显式传入强密码或优先使用 SSH Key。
+default_password = {% if default_password is defined and default_password %}"{{ default_password }}"{% else %}null{% endif %}
 
 default_ssh_public_keys = [
   "{{ default_ssh_public_key | default('ssh-ed25519 CHANGE_ME user@host', true) }}"
