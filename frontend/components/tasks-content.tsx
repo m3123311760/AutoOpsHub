@@ -15,9 +15,6 @@ import {
   X,
   Terminal,
   RotateCcw,
-  ClipboardList,
-  UploadCloud,
-  Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,7 +32,7 @@ import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { TaskLogPanel, TaskLogDialog } from "@/components/task-log-viewer";
 import { TaskParameterDialog } from "@/components/task-parameter-dialog";
-import { runbookApi, taskApi, type ManifestVariable, type TaskSummary, type Task } from "@/lib/api";
+import { runbookApi, taskApi, type ManifestVariable, type TaskSummary, type Task, type TerraformTaskAction } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 
 interface TasksContentProps {
@@ -48,6 +45,11 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     () => taskApi.list(workpiece),
     { refreshInterval: 5000 }
   );
+  const { data: runbooksData } = useSWR(
+    `runbooks-${workpiece}`,
+    () => runbookApi.list(workpiece),
+    { refreshInterval: 10000 }
+  );
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -57,10 +59,13 @@ export function TasksContent({ workpiece }: TasksContentProps) {
   const [rerunManifest, setRerunManifest] = useState<ManifestVariable[]>([]);
   const [rerunError, setRerunError] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
-  const [destroyConfirmTask, setDestroyConfirmTask] = useState<TaskSummary | Task | null>(null);
+  const [destroyTask, setDestroyTask] = useState<TaskSummary | Task | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const tasks = data?.items || [];
+  const runbookTypeByName = new Map((runbooksData?.items || []).map((runbook) => [runbook.name, runbook.type]));
+  const getTaskRunbookType = (task: TaskSummary | Task) =>
+    task.runbook_missing ? undefined : task.runbook_type || runbookTypeByName.get(task.runbook_name);
 
   // Sort by created_at desc
   const sortedTasks = [...tasks].sort(
@@ -69,7 +74,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
   const canCreateFollowUpTask = (task: TaskSummary | Task) => !task.runbook_missing;
   const isTerraformTask = (task: TaskSummary | Task) =>
-    canCreateFollowUpTask(task) && task.runbook_type === "Terraform";
+    canCreateFollowUpTask(task) && getTaskRunbookType(task) === "Terraform";
 
   const loadTaskDetail = async (taskId: string) => {
     try {
@@ -116,48 +121,6 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     }
   };
 
-  const handleTerraformAction = async (
-    task: TaskSummary | Task,
-    action: "plan" | "apply" | "destroy" | "output"
-  ) => {
-    if (!isTerraformTask(task)) return;
-    if (action === "destroy") {
-      setDestroyConfirmTask(task);
-      return;
-    }
-
-    setIsSubmitting(true);
-    setLogTask(null);
-    setLogOpen(true);
-    try {
-      const response = await taskApi.terraformAction(task.task_id, action);
-      mutate(`tasks-${workpiece}`);
-      setLogTask(response.task);
-    } catch (err) {
-      console.error("Terraform 操作失败:", err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const confirmDestroy = async () => {
-    if (!destroyConfirmTask || !isTerraformTask(destroyConfirmTask)) return;
-
-    setIsSubmitting(true);
-    setLogTask(null);
-    setLogOpen(true);
-    try {
-      const response = await taskApi.terraformAction(destroyConfirmTask.task_id, "destroy");
-      setDestroyConfirmTask(null);
-      mutate(`tasks-${workpiece}`);
-      setLogTask(response.task);
-    } catch (err) {
-      console.error("Terraform Destroy 失败:", err);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
   const handleRerun = async (variables: Record<string, unknown>) => {
     if (!rerunTask) return;
     setIsSubmitting(true);
@@ -175,6 +138,42 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const runTerraformAction = async (task: TaskSummary | Task, action: TerraformTaskAction) => {
+    if (!isTerraformTask(task)) return;
+    setIsSubmitting(true);
+    setLogTask(null);
+    setLogOpen(true);
+    try {
+      const response = await taskApi.terraformAction(task.task_id, action);
+      mutate(`tasks-${workpiece}`);
+      setLogTask(response.task);
+      if (selectedTask?.task_id === task.task_id) {
+        const updated = await taskApi.get(workpiece, task.task_id);
+        setSelectedTask(updated);
+      }
+    } catch (err) {
+      console.error(`Terraform ${action} 失败:`, err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleTerraformAction = (task: TaskSummary | Task, action: TerraformTaskAction) => {
+    if (!isTerraformTask(task)) return;
+    if (action === "destroy") {
+      setDestroyTask(task);
+      return;
+    }
+    runTerraformAction(task, action);
+  };
+
+  const confirmDestroy = async () => {
+    if (!destroyTask) return;
+    const task = destroyTask;
+    setDestroyTask(null);
+    await runTerraformAction(task, "destroy");
   };
 
   const handleConfirm = async () => {
@@ -295,46 +294,13 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center justify-end gap-1">
                     {isTerraformTask(task) && (
-                      <>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleTerraformAction(task, "plan")}
-                          disabled={isSubmitting || task.status === "running"}
-                        >
-                          <ClipboardList className="mr-2 h-4 w-4" />
-                          Plan
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleTerraformAction(task, "apply")}
-                          disabled={isSubmitting || task.status === "running"}
-                        >
-                          <UploadCloud className="mr-2 h-4 w-4" />
-                          Apply
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleTerraformAction(task, "output")}
-                          disabled={isSubmitting || task.status === "running"}
-                        >
-                          <Terminal className="mr-2 h-4 w-4" />
-                          Output
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleTerraformAction(task, "destroy")}
-                          disabled={isSubmitting || task.status === "running"}
-                        >
-                          <Trash2 className="mr-2 h-4 w-4" />
-                          Destroy
-                        </Button>
-                      </>
+                      <TerraformActionButtons
+                        task={task}
+                        isSubmitting={isSubmitting}
+                        onAction={handleTerraformAction}
+                      />
                     )}
                     {canCreateFollowUpTask(task) && (
                       <Button
@@ -469,44 +435,8 @@ export function TasksContent({ workpiece }: TasksContentProps) {
               </TabsContent>
             </Tabs>
           )}
-          <DialogFooter>
-            {selectedTask && isTerraformTask(selectedTask) && (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => handleTerraformAction(selectedTask, "plan")}
-                  disabled={isSubmitting || selectedTask.status === "running"}
-                >
-                  <ClipboardList className="mr-2 h-4 w-4" />
-                  Plan
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => handleTerraformAction(selectedTask, "apply")}
-                  disabled={isSubmitting || selectedTask.status === "running"}
-                >
-                  <UploadCloud className="mr-2 h-4 w-4" />
-                  Apply
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => handleTerraformAction(selectedTask, "output")}
-                  disabled={isSubmitting || selectedTask.status === "running"}
-                >
-                  <Terminal className="mr-2 h-4 w-4" />
-                  Output
-                </Button>
-                <Button
-                  variant="outline"
-                  onClick={() => handleTerraformAction(selectedTask, "destroy")}
-                  disabled={isSubmitting || selectedTask.status === "running"}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Destroy
-                </Button>
-              </>
-            )}
-            {(selectedTask?.status === "pending" || selectedTask?.status === "ready") ? (
+          <DialogFooter className="flex flex-wrap gap-2">
+            {(selectedTask?.status === "pending" || selectedTask?.status === "ready") && (
               <>
                 <Button
                   variant="outline"
@@ -529,34 +459,38 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                   确认执行
                 </Button>
               </>
-            ) : (
-              <Button variant="outline" onClick={() => setDetailOpen(false)}>
-                关闭
-              </Button>
             )}
+            {selectedTask && isTerraformTask(selectedTask) && (
+              <TerraformActionButtons
+                task={selectedTask}
+                isSubmitting={isSubmitting}
+                onAction={handleTerraformAction}
+              />
+            )}
+            <Button variant="outline" onClick={() => setDetailOpen(false)}>
+              关闭
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(destroyConfirmTask)} onOpenChange={(open) => !open && setDestroyConfirmTask(null)}>
+      <Dialog open={Boolean(destroyTask)} onOpenChange={(open) => !open && setDestroyTask(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>确认 Destroy</DialogTitle>
             <DialogDescription>
-              {destroyConfirmTask
-                ? `将基于任务 ${destroyConfirmTask.task_id} 创建 Terraform destroy 任务。`
-                : ""}
+              将基于任务 {destroyTask?.task_id} 的 Terraform state 创建 destroy 任务。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDestroyConfirmTask(null)} disabled={isSubmitting}>
+            <Button variant="outline" onClick={() => setDestroyTask(null)} disabled={isSubmitting}>
               取消
             </Button>
             <Button onClick={confirmDestroy} disabled={isSubmitting}>
               {isSubmitting ? (
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
-                <Trash2 className="mr-2 h-4 w-4" />
+                <AlertTriangle className="mr-2 h-4 w-4" />
               )}
               确认 Destroy
             </Button>
@@ -590,4 +524,36 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
 function Label({ children }: { children: React.ReactNode }) {
   return <div className="text-sm font-medium text-muted-foreground">{children}</div>;
+}
+
+function TerraformActionButtons({
+  task,
+  isSubmitting,
+  onAction,
+}: {
+  task: TaskSummary | Task;
+  isSubmitting: boolean;
+  onAction: (task: TaskSummary | Task, action: TerraformTaskAction) => void;
+}) {
+  const disabled = isSubmitting || task.status === "running";
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <Button variant="outline" size="sm" onClick={() => onAction(task, "plan")} disabled={disabled}>
+        <Eye className="mr-2 h-4 w-4" />
+        Plan
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => onAction(task, "apply")} disabled={disabled}>
+        <Play className="mr-2 h-4 w-4" />
+        Apply
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => onAction(task, "output")} disabled={disabled}>
+        <Terminal className="mr-2 h-4 w-4" />
+        Output
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => onAction(task, "destroy")} disabled={disabled}>
+        <AlertTriangle className="mr-2 h-4 w-4" />
+        Destroy
+      </Button>
+    </div>
+  );
 }

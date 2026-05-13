@@ -84,13 +84,13 @@ test("tasks page gates rerun and terraform actions by runbook resolution", () =>
   assert.match(apiSource, /runbook_type: RunbookType \| null/);
   assert.match(apiSource, /runbook_missing: boolean/);
   assert.match(source, /const canCreateFollowUpTask = \(task: TaskSummary \| Task\) => !task\.runbook_missing/);
-  assert.match(source, /task\.runbook_type === "Terraform"/);
+  assert.match(source, /getTaskRunbookType\(task\) === "Terraform"/);
   assert.match(source, /Runbook 已删除/);
   assert.match(source, /确认 Destroy/);
-  assert.match(source, /handleTerraformAction\(task, "plan"\)/);
-  assert.match(source, /handleTerraformAction\(task, "apply"\)/);
-  assert.match(source, /handleTerraformAction\(task, "output"\)/);
-  assert.match(source, /handleTerraformAction\(task, "destroy"\)/);
+  assert.match(source, /onAction\(task, "plan"\)/);
+  assert.match(source, /onAction\(task, "apply"\)/);
+  assert.match(source, /onAction\(task, "output"\)/);
+  assert.match(source, /onAction\(task, "destroy"\)/);
 });
 
 test("fetcher only sends JSON content type when a body is present", async () => {
@@ -142,6 +142,19 @@ test("task parameter dialog keeps actions reachable when many variables render",
   assert.match(source, /grid-rows-\[auto_minmax\(0,1fr\)_auto\]/);
   assert.match(source, /overflow-y-auto/);
   assert.match(source, /shrink-0/);
+});
+
+test("tasks page exposes direct terraform action controls", () => {
+  const source = readFileSync(new URL("../components/tasks-content.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /terraformAction/);
+  assert.match(source, /runbookTypeByName/);
+  assert.match(source, /getTaskRunbookType/);
+  assert.match(source, /Plan/);
+  assert.match(source, /Apply/);
+  assert.match(source, /Destroy/);
+  assert.match(source, /Output/);
+  assert.match(source, /确认 Destroy/);
 });
 
 test("auth API clients cover login and API key management", async () => {
