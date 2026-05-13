@@ -474,6 +474,11 @@ def _load_runbook_for_task_action(workpiece_name: str, task: TaskRecord, action_
                 detail=f"task runbook not found; cannot {action_name}",
             ) from exc
         raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"task runbook not found; cannot {action_name}",
+        ) from exc
 
 
 def _save_manifest(workpiece_name: str, runbook_name: str, manifest: list[ManifestVariable]) -> None:

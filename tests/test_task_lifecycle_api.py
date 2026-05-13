@@ -14,6 +14,12 @@ from main import app
 client = TestClient(app)
 
 
+def _find_task(items: list[dict], task_id: str) -> dict:
+    task = next((item for item in items if item["task_id"] == task_id), None)
+    assert task is not None, f"Task {task_id} not found in task list"
+    return task
+
+
 def setup_module() -> None:
     client.delete("/api/workpieces/tasks-wp")
     client.post("/api/workpieces/tasks-wp", json={"description": "task tests"})
@@ -84,7 +90,7 @@ def test_task_list_detail_update_confirm_cancel():
 
     list_resp = client.get("/api/workpieces/tasks-wp/tasks")
     assert list_resp.status_code == 200
-    task_summary = next(x for x in list_resp.json()["items"] if x["task_id"] == task_id)
+    task_summary = _find_task(list_resp.json()["items"], task_id)
     assert task_summary["runbook_type"] == "Workflow"
     assert task_summary["runbook_missing"] is False
 
@@ -139,7 +145,7 @@ def test_task_list_detail_tolerate_missing_runbook_and_reject_follow_up_actions(
 
     list_resp = client.get("/api/workpieces/tasks-missing-runbook/tasks")
     assert list_resp.status_code == 200
-    task_summary = next(x for x in list_resp.json()["items"] if x["task_id"] == task_id)
+    task_summary = _find_task(list_resp.json()["items"], task_id)
     assert task_summary["runbook_name"] == "rb-old"
     assert task_summary["runbook_type"] is None
     assert task_summary["runbook_missing"] is True
@@ -187,13 +193,15 @@ def test_task_list_detail_tolerate_invalid_runbook_metadata():
 
     list_resp = client.get("/api/workpieces/tasks-invalid-runbook/tasks")
     assert list_resp.status_code == 200
-    task_summary = next(x for x in list_resp.json()["items"] if x["task_id"] == task_id)
+    task_summary = _find_task(list_resp.json()["items"], task_id)
     assert task_summary["runbook_type"] is None
     assert task_summary["runbook_missing"] is True
 
     detail = client.get(f"/api/workpieces/tasks-invalid-runbook/tasks/{task_id}")
     assert detail.status_code == 200
-    assert detail.json()["runbook_missing"] is True
+    detail_body = detail.json()
+    assert detail_body["runbook_type"] is None
+    assert detail_body["runbook_missing"] is True
 
 
 def test_confirm_ready_task_is_idempotent_and_queues_execution_once(monkeypatch):
