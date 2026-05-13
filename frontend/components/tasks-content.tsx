@@ -60,6 +60,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
   const [rerunError, setRerunError] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [destroyTask, setDestroyTask] = useState<TaskSummary | Task | null>(null);
+  const [taskActionError, setTaskActionError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const tasks = data?.items || [];
@@ -100,6 +101,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     setIsSubmitting(true);
     setRerunError("");
     setRerunManifest([]);
+    setRerunTask(null);
     try {
       const task = await taskApi.get(workpiece, taskId);
       if (task.runbook_missing) {
@@ -144,17 +146,19 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     if (!isTerraformTask(task)) return;
     setIsSubmitting(true);
     setLogTask(null);
-    setLogOpen(true);
+    setTaskActionError("");
     try {
       const response = await taskApi.terraformAction(task.task_id, action);
       mutate(`tasks-${workpiece}`);
       setLogTask(response.task);
+      setLogOpen(true);
       if (selectedTask?.task_id === task.task_id) {
         const updated = await taskApi.get(workpiece, task.task_id);
         setSelectedTask(updated);
       }
     } catch (err) {
       console.error(`Terraform ${action} 失败:`, err);
+      setTaskActionError(err instanceof Error ? err.message : `Terraform ${action} 失败`);
     } finally {
       setIsSubmitting(false);
     }
@@ -236,6 +240,12 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
   return (
     <div className="space-y-6">
+      {taskActionError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {taskActionError}
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-6 gap-4">
         {Object.entries(statusCounts).map(([status, count]) => (
@@ -434,6 +444,11 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                 <TaskLogPanel workpiece={workpiece} taskId={selectedTask.task_id} initialTask={selectedTask} />
               </TabsContent>
             </Tabs>
+          )}
+          {taskActionError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {taskActionError}
+            </div>
           )}
           <DialogFooter className="flex flex-wrap gap-2">
             {(selectedTask?.status === "pending" || selectedTask?.status === "ready") && (

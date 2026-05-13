@@ -438,7 +438,10 @@ def _task_runbook_resolution(workpiece_name: str, task: TaskRecord) -> dict[str,
     path = _runbook_path(workpiece_name, task.runbook_name)
     if not path.exists():
         return {"runbook_type": None, "runbook_missing": True}
-    runbook = RunbookRecord.model_validate(_read_json(path))
+    try:
+        runbook = RunbookRecord.model_validate(_read_json(path))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValidationError):
+        return {"runbook_type": None, "runbook_missing": True}
     return {"runbook_type": runbook.type.value, "runbook_missing": False}
 
 
@@ -1618,6 +1621,7 @@ async def confirm_task(workpiece_name: str, task_id: str, background_tasks: Back
         raise HTTPException(status_code=409, detail="task already canceled")
     if task.schedule.get("confirmed_at"):
         raise HTTPException(status_code=409, detail="task already confirmed")
+    _load_runbook_for_task_action(workpiece_name, task, "confirm task")
     manifest = _load_manifest(workpiece_name, task.runbook_name)
     missing, unknown, _ = _validate_variables(manifest, task.variables)
     if missing or unknown:

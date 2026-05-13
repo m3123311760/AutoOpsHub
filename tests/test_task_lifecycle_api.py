@@ -151,6 +151,10 @@ def test_task_list_detail_tolerate_missing_runbook_and_reject_follow_up_actions(
     assert detail_body["runbook_type"] is None
     assert detail_body["runbook_missing"] is True
 
+    confirm = client.post(f"/api/workpieces/tasks-missing-runbook/tasks/{task_id}/confirm")
+    assert confirm.status_code == 409
+    assert "runbook not found" in confirm.json()["detail"]
+
     rerun = client.post(f"/api/tasks/{task_id}/rerun", json={"variables": {}})
     assert rerun.status_code == 409
     assert "runbook not found" in rerun.json()["detail"]
@@ -161,6 +165,35 @@ def test_task_list_detail_tolerate_missing_runbook_and_reject_follow_up_actions(
     )
     assert terraform_action.status_code == 409
     assert "runbook not found" in terraform_action.json()["detail"]
+
+
+def test_task_list_detail_tolerate_invalid_runbook_metadata():
+    client.delete("/api/workpieces/tasks-invalid-runbook")
+    create_wp = client.post("/api/workpieces/tasks-invalid-runbook", json={"description": "invalid runbook"})
+    assert create_wp.status_code == 201
+    create_runbook = client.post(
+        "/api/workpieces/tasks-invalid-runbook/runbooks/rb-bad",
+        json={"type": "Workflow", "content": "steps: []\n"},
+    )
+    assert create_runbook.status_code == 201
+    created = client.post(
+        "/api/workpieces/tasks-invalid-runbook/runbooks/rb-bad/trigger",
+        json={"variables": {}},
+    )
+    assert created.status_code == 201
+    task_id = created.json()["task"]["task_id"]
+
+    main._runbook_path("tasks-invalid-runbook", "rb-bad").write_text("{", encoding="utf-8")
+
+    list_resp = client.get("/api/workpieces/tasks-invalid-runbook/tasks")
+    assert list_resp.status_code == 200
+    task_summary = next(x for x in list_resp.json()["items"] if x["task_id"] == task_id)
+    assert task_summary["runbook_type"] is None
+    assert task_summary["runbook_missing"] is True
+
+    detail = client.get(f"/api/workpieces/tasks-invalid-runbook/tasks/{task_id}")
+    assert detail.status_code == 200
+    assert detail.json()["runbook_missing"] is True
 
 
 def test_confirm_ready_task_is_idempotent_and_queues_execution_once(monkeypatch):
