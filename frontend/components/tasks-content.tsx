@@ -15,6 +15,9 @@ import {
   X,
   Terminal,
   RotateCcw,
+  ClipboardList,
+  UploadCloud,
+  Trash2,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -54,6 +57,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
   const [rerunManifest, setRerunManifest] = useState<ManifestVariable[]>([]);
   const [rerunError, setRerunError] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [destroyConfirmTask, setDestroyConfirmTask] = useState<TaskSummary | Task | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const tasks = data?.items || [];
@@ -62,6 +66,10 @@ export function TasksContent({ workpiece }: TasksContentProps) {
   const sortedTasks = [...tasks].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
+
+  const canCreateFollowUpTask = (task: TaskSummary | Task) => !task.runbook_missing;
+  const isTerraformTask = (task: TaskSummary | Task) =>
+    canCreateFollowUpTask(task) && task.runbook_type === "Terraform";
 
   const loadTaskDetail = async (taskId: string) => {
     try {
@@ -89,6 +97,12 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     setRerunManifest([]);
     try {
       const task = await taskApi.get(workpiece, taskId);
+      if (task.runbook_missing) {
+        setRerunTask(task);
+        setRerunError("关联的运行手册已删除，不能重新运行该历史任务");
+        setRerunOpen(true);
+        return;
+      }
       const manifest = await runbookApi.getManifest(workpiece, task.runbook_name);
       setRerunTask(task);
       setRerunManifest(manifest.items);
@@ -97,6 +111,48 @@ export function TasksContent({ workpiece }: TasksContentProps) {
       console.error("加载重新运行参数失败:", err);
       setRerunError(err instanceof Error ? err.message : "加载重新运行参数失败");
       setRerunOpen(true);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleTerraformAction = async (
+    task: TaskSummary | Task,
+    action: "plan" | "apply" | "destroy" | "output"
+  ) => {
+    if (!isTerraformTask(task)) return;
+    if (action === "destroy") {
+      setDestroyConfirmTask(task);
+      return;
+    }
+
+    setIsSubmitting(true);
+    setLogTask(null);
+    setLogOpen(true);
+    try {
+      const response = await taskApi.terraformAction(task.task_id, action);
+      mutate(`tasks-${workpiece}`);
+      setLogTask(response.task);
+    } catch (err) {
+      console.error("Terraform 操作失败:", err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const confirmDestroy = async () => {
+    if (!destroyConfirmTask || !isTerraformTask(destroyConfirmTask)) return;
+
+    setIsSubmitting(true);
+    setLogTask(null);
+    setLogOpen(true);
+    try {
+      const response = await taskApi.terraformAction(destroyConfirmTask.task_id, "destroy");
+      setDestroyConfirmTask(null);
+      mutate(`tasks-${workpiece}`);
+      setLogTask(response.task);
+    } catch (err) {
+      console.error("Terraform Destroy 失败:", err);
     } finally {
       setIsSubmitting(false);
     }
@@ -231,18 +287,65 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                       </div>
                       <div className="mt-1 text-sm text-muted-foreground">
                         {task.runbook_name} · {formatDate(task.created_at)}
+                        {task.runbook_missing && (
+                          <Badge variant="destructive" className="ml-2 text-xs">
+                            Runbook 已删除
+                          </Badge>
+                        )}
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openRerunDialog(task.task_id)}
-                    >
-                      <RotateCcw className="mr-2 h-4 w-4" />
-                      重跑
-                    </Button>
+                    {isTerraformTask(task) && (
+                      <>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleTerraformAction(task, "plan")}
+                          disabled={isSubmitting || task.status === "running"}
+                        >
+                          <ClipboardList className="mr-2 h-4 w-4" />
+                          Plan
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleTerraformAction(task, "apply")}
+                          disabled={isSubmitting || task.status === "running"}
+                        >
+                          <UploadCloud className="mr-2 h-4 w-4" />
+                          Apply
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleTerraformAction(task, "output")}
+                          disabled={isSubmitting || task.status === "running"}
+                        >
+                          <Terminal className="mr-2 h-4 w-4" />
+                          Output
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleTerraformAction(task, "destroy")}
+                          disabled={isSubmitting || task.status === "running"}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" />
+                          Destroy
+                        </Button>
+                      </>
+                    )}
+                    {canCreateFollowUpTask(task) && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openRerunDialog(task.task_id)}
+                      >
+                        <RotateCcw className="mr-2 h-4 w-4" />
+                        重跑
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -302,7 +405,18 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                   </div>
                   <div>
                     <Label>运行手册</Label>
-                    <div className="mt-1 font-medium">{selectedTask.runbook_name}</div>
+                    <div className="mt-1 flex items-center gap-2 font-medium">
+                      {selectedTask.runbook_name}
+                      {selectedTask.runbook_missing ? (
+                        <Badge variant="destructive" className="text-xs">
+                          Runbook 已删除
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs">
+                          {selectedTask.runbook_type}
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                   <div>
                     <Label>退出码</Label>
@@ -356,7 +470,43 @@ export function TasksContent({ workpiece }: TasksContentProps) {
             </Tabs>
           )}
           <DialogFooter>
-            {selectedTask?.status === "pending" || selectedTask?.status === "ready" ? (
+            {selectedTask && isTerraformTask(selectedTask) && (
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => handleTerraformAction(selectedTask, "plan")}
+                  disabled={isSubmitting || selectedTask.status === "running"}
+                >
+                  <ClipboardList className="mr-2 h-4 w-4" />
+                  Plan
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleTerraformAction(selectedTask, "apply")}
+                  disabled={isSubmitting || selectedTask.status === "running"}
+                >
+                  <UploadCloud className="mr-2 h-4 w-4" />
+                  Apply
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleTerraformAction(selectedTask, "output")}
+                  disabled={isSubmitting || selectedTask.status === "running"}
+                >
+                  <Terminal className="mr-2 h-4 w-4" />
+                  Output
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleTerraformAction(selectedTask, "destroy")}
+                  disabled={isSubmitting || selectedTask.status === "running"}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Destroy
+                </Button>
+              </>
+            )}
+            {(selectedTask?.status === "pending" || selectedTask?.status === "ready") ? (
               <>
                 <Button
                   variant="outline"
@@ -370,7 +520,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                   )}
                   取消任务
                 </Button>
-                <Button onClick={handleConfirm} disabled={isSubmitting}>
+                <Button onClick={handleConfirm} disabled={isSubmitting || selectedTask.runbook_missing}>
                   {isSubmitting ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
@@ -384,6 +534,32 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                 关闭
               </Button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(destroyConfirmTask)} onOpenChange={(open) => !open && setDestroyConfirmTask(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认 Destroy</DialogTitle>
+            <DialogDescription>
+              {destroyConfirmTask
+                ? `将基于任务 ${destroyConfirmTask.task_id} 创建 Terraform destroy 任务。`
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDestroyConfirmTask(null)} disabled={isSubmitting}>
+              取消
+            </Button>
+            <Button onClick={confirmDestroy} disabled={isSubmitting}>
+              {isSubmitting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="mr-2 h-4 w-4" />
+              )}
+              确认 Destroy
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

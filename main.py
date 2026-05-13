@@ -434,6 +434,45 @@ def _load_runbook(workpiece_name: str, runbook_name: str) -> RunbookRecord:
     return RunbookRecord.model_validate(_read_json(path))
 
 
+def _task_runbook_resolution(workpiece_name: str, task: TaskRecord) -> dict[str, Any]:
+    path = _runbook_path(workpiece_name, task.runbook_name)
+    if not path.exists():
+        return {"runbook_type": None, "runbook_missing": True}
+    runbook = RunbookRecord.model_validate(_read_json(path))
+    return {"runbook_type": runbook.type.value, "runbook_missing": False}
+
+
+def _task_payload(workpiece_name: str, task: TaskRecord) -> dict[str, Any]:
+    payload = task.model_dump()
+    payload.update(_task_runbook_resolution(workpiece_name, task))
+    return payload
+
+
+def _task_summary_payload(workpiece_name: str, task: TaskRecord) -> dict[str, Any]:
+    return {
+        "task_id": task.task_id,
+        "runbook_name": task.runbook_name,
+        "source": task.source.value,
+        "status": task.status.value,
+        "created_at": task.created_at,
+        "updated_at": task.updated_at,
+        "variables_summary": {"count": len(task.variables)},
+        **_task_runbook_resolution(workpiece_name, task),
+    }
+
+
+def _load_runbook_for_task_action(workpiece_name: str, task: TaskRecord, action_name: str) -> RunbookRecord:
+    try:
+        return _load_runbook(workpiece_name, task.runbook_name)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise HTTPException(
+                status_code=409,
+                detail=f"task runbook not found; cannot {action_name}",
+            ) from exc
+        raise
+
+
 def _save_manifest(workpiece_name: str, runbook_name: str, manifest: list[ManifestVariable]) -> None:
     _write_json(_manifest_path(workpiece_name, runbook_name), {"items": [item.model_dump() for item in manifest]})
 
@@ -1058,7 +1097,7 @@ def _create_rerun_task_from_original(
     variables: dict[str, Any],
     background_tasks: BackgroundTasks | None,
 ) -> tuple[TaskRecord, list[ManifestVariable], list[str], list[str]]:
-    runbook = _load_runbook(workpiece_name, original.runbook_name)
+    runbook = _load_runbook_for_task_action(workpiece_name, original, "rerun task")
     inherited_runtime_dir = None
     if runbook.type == RunbookType.TERRAFORM:
         inherited_runtime_dir = Path(str(original.schedule.get("runtime_dir") or _task_runtime_dir(original.task_id)))
@@ -1533,7 +1572,7 @@ async def trigger_runbook(
         workpiece_name, runbook_name, body.variables, TaskSource.MANUAL, background_tasks
     )
 
-    payload = {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
+    payload = {"task": _task_payload(workpiece_name, task), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
     if missing:
         return JSONResponse(content=payload, status_code=202)
     return JSONResponse(content=payload, status_code=201)
@@ -1544,24 +1583,14 @@ async def list_tasks(workpiece_name: str) -> dict[str, list[dict[str, Any]]]:
     _load_meta(workpiece_name)
     items = []
     for task in _list_tasks(workpiece_name):
-        items.append(
-            {
-                "task_id": task.task_id,
-                "runbook_name": task.runbook_name,
-                "source": task.source.value,
-                "status": task.status.value,
-                "created_at": task.created_at,
-                "updated_at": task.updated_at,
-                "variables_summary": {"count": len(task.variables)},
-            }
-        )
+        items.append(_task_summary_payload(workpiece_name, task))
     return {"items": items}
 
 
 @app.get("/api/workpieces/{workpiece_name}/tasks/{task_id}")
 async def get_task(workpiece_name: str, task_id: str) -> dict[str, Any]:
     _load_meta(workpiece_name)
-    return _load_task(workpiece_name, task_id).model_dump()
+    return _task_payload(workpiece_name, _load_task(workpiece_name, task_id))
 
 
 @app.put("/api/workpieces/{workpiece_name}/tasks/{task_id}/variables")
@@ -1578,7 +1607,7 @@ async def update_task_variables(workpiece_name: str, task_id: str, body: TaskVar
     task.variables = body.variables
     task.updated_at = _utc_now()
     _save_task(workpiece_name, task)
-    return task.model_dump()
+    return _task_payload(workpiece_name, task)
 
 
 @app.post("/api/workpieces/{workpiece_name}/tasks/{task_id}/confirm")
@@ -1608,7 +1637,7 @@ async def confirm_task(workpiece_name: str, task_id: str, background_tasks: Back
     task.error_summary = ""
     _save_task(workpiece_name, task)
     background_tasks.add_task(_execute_task_by_id, workpiece_name, task.task_id)
-    return Response(content=json.dumps({"task": task.model_dump()}, ensure_ascii=False), status_code=202, media_type="application/json")
+    return Response(content=json.dumps({"task": _task_payload(workpiece_name, task)}, ensure_ascii=False), status_code=202, media_type="application/json")
 
 
 @app.post("/api/tasks/{task_id}/rerun", status_code=201)
@@ -1616,7 +1645,7 @@ async def rerun_task(task_id: str, background_tasks: BackgroundTasks, body: Task
     workpiece_name, original = _find_task_workpiece(task_id)
     variables = {**original.variables, **((body.variables if body is not None else {}) or {})}
     task, manifest, missing, _unknown = _create_rerun_task_from_original(workpiece_name, original, variables, background_tasks)
-    return {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
+    return {"task": _task_payload(workpiece_name, task), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
 
 
 @app.post("/api/tasks/{task_id}/terraform/actions", status_code=201)
@@ -1626,12 +1655,12 @@ async def terraform_task_action(
     body: TerraformTaskActionRequest,
 ) -> dict[str, Any]:
     workpiece_name, original = _find_task_workpiece(task_id)
-    runbook = _load_runbook(workpiece_name, original.runbook_name)
+    runbook = _load_runbook_for_task_action(workpiece_name, original, "run terraform action")
     if runbook.type != RunbookType.TERRAFORM:
         raise HTTPException(status_code=400, detail="terraform actions only support Terraform tasks")
     variables = {**original.variables, **body.variables, "system.set_runtime": TERRAFORM_ACTION_COMMANDS[body.action]}
     task, manifest, missing, _unknown = _create_rerun_task_from_original(workpiece_name, original, variables, background_tasks)
-    return {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
+    return {"task": _task_payload(workpiece_name, task), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
 
 
 @app.post("/api/workpieces/{workpiece_name}/tasks/{task_id}/cancel")
@@ -1643,7 +1672,7 @@ async def cancel_task(workpiece_name: str, task_id: str) -> dict[str, Any]:
     task.status = TaskStatus.CANCELED
     task.updated_at = _utc_now()
     _save_task(workpiece_name, task)
-    return task.model_dump()
+    return _task_payload(workpiece_name, task)
 
 
 def _read_task_logs(workpiece_name: str, task_id: str, after: int, limit: int) -> list[dict[str, Any]]:
@@ -1790,4 +1819,4 @@ async def trigger_job(workpiece_name: str, job_name: str) -> dict[str, Any]:
     job.next_run_at = _next_run_at(job.cron) if job.enabled else None
     job.updated_at = _utc_now()
     _save_job(workpiece_name, job)
-    return {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing, "unknown_variables": unknown}
+    return {"task": _task_payload(workpiece_name, task), "manifest": [m.model_dump() for m in manifest], "missing_required": missing, "unknown_variables": unknown}
