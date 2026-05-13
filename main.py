@@ -63,6 +63,21 @@ class SettingAction(str, Enum):
     SCHEDULE_CANCEL = "schedule_cancel"
 
 
+class TerraformTaskAction(str, Enum):
+    PLAN = "plan"
+    APPLY = "apply"
+    DESTROY = "destroy"
+    OUTPUT = "output"
+
+
+TERRAFORM_ACTION_COMMANDS: dict[TerraformTaskAction, str] = {
+    TerraformTaskAction.PLAN: "terraform plan -input=false",
+    TerraformTaskAction.APPLY: "terraform apply -input=false -auto-approve",
+    TerraformTaskAction.DESTROY: "terraform destroy -input=false -auto-approve",
+    TerraformTaskAction.OUTPUT: "terraform output",
+}
+
+
 class ManifestVariableDirection(str, Enum):
     INPUT = "input"
     OUTPUT = "output"
@@ -205,6 +220,11 @@ class TaskVariablesUpdateRequest(BaseModel):
 
 
 class TaskRerunRequest(BaseModel):
+    variables: dict[str, Any] = Field(default_factory=dict)
+
+
+class TerraformTaskActionRequest(BaseModel):
+    action: TerraformTaskAction
     variables: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -1032,6 +1052,44 @@ def _create_task_from_runbook(
     return task, manifest, missing, unknown
 
 
+def _create_rerun_task_from_original(
+    workpiece_name: str,
+    original: TaskRecord,
+    variables: dict[str, Any],
+    background_tasks: BackgroundTasks | None,
+) -> tuple[TaskRecord, list[ManifestVariable], list[str], list[str]]:
+    runbook = _load_runbook(workpiece_name, original.runbook_name)
+    inherited_runtime_dir = None
+    if runbook.type == RunbookType.TERRAFORM:
+        inherited_runtime_dir = Path(str(original.schedule.get("runtime_dir") or _task_runtime_dir(original.task_id)))
+    try:
+        manifest = _load_manifest(workpiece_name, original.runbook_name)
+        _validate_task_variables_against_readonly(manifest, variables)
+        missing, unknown, _ = _validate_variables(manifest, variables)
+        if missing or unknown:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "rerun variables failed validation",
+                    "missing_required": missing,
+                    "unknown_variables": unknown,
+                    "manifest": [m.model_dump() for m in manifest],
+                },
+            )
+        return _create_task_from_runbook(
+            workpiece_name,
+            original.runbook_name,
+            variables,
+            original.source,
+            background_tasks,
+            inherited_runtime_dir,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 422:
+            raise HTTPException(status_code=400, detail=exc.detail) from exc
+        raise
+
+
 app = FastAPI()
 
 settings = load_settings()
@@ -1557,36 +1615,22 @@ async def confirm_task(workpiece_name: str, task_id: str, background_tasks: Back
 async def rerun_task(task_id: str, background_tasks: BackgroundTasks, body: TaskRerunRequest | None = None) -> dict[str, Any]:
     workpiece_name, original = _find_task_workpiece(task_id)
     variables = {**original.variables, **((body.variables if body is not None else {}) or {})}
+    task, manifest, missing, _unknown = _create_rerun_task_from_original(workpiece_name, original, variables, background_tasks)
+    return {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
+
+
+@app.post("/api/tasks/{task_id}/terraform/actions", status_code=201)
+async def terraform_task_action(
+    task_id: str,
+    background_tasks: BackgroundTasks,
+    body: TerraformTaskActionRequest,
+) -> dict[str, Any]:
+    workpiece_name, original = _find_task_workpiece(task_id)
     runbook = _load_runbook(workpiece_name, original.runbook_name)
-    inherited_runtime_dir = None
-    if runbook.type == RunbookType.TERRAFORM:
-        inherited_runtime_dir = Path(str(original.schedule.get("runtime_dir") or _task_runtime_dir(original.task_id)))
-    try:
-        manifest = _load_manifest(workpiece_name, original.runbook_name)
-        _validate_task_variables_against_readonly(manifest, variables)
-        missing, unknown, _ = _validate_variables(manifest, variables)
-        if missing or unknown:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": "rerun variables failed validation",
-                    "missing_required": missing,
-                    "unknown_variables": unknown,
-                    "manifest": [m.model_dump() for m in manifest],
-                },
-            )
-        task, manifest, missing, unknown = _create_task_from_runbook(
-            workpiece_name,
-            original.runbook_name,
-            variables,
-            original.source,
-            background_tasks,
-            inherited_runtime_dir,
-        )
-    except HTTPException as exc:
-        if exc.status_code == 422:
-            raise HTTPException(status_code=400, detail=exc.detail) from exc
-        raise
+    if runbook.type != RunbookType.TERRAFORM:
+        raise HTTPException(status_code=400, detail="terraform actions only support Terraform tasks")
+    variables = {**original.variables, **body.variables, "system.set_runtime": TERRAFORM_ACTION_COMMANDS[body.action]}
+    task, manifest, missing, _unknown = _create_rerun_task_from_original(workpiece_name, original, variables, background_tasks)
     return {"task": task.model_dump(), "manifest": [m.model_dump() for m in manifest], "missing_required": missing}
 
 

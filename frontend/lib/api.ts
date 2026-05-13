@@ -152,6 +152,11 @@ export const taskApi = {
       method: "POST",
       ...(variables ? { body: JSON.stringify({ variables }) } : {}),
     }),
+  terraformAction: (taskId: string, action: TerraformTaskAction, variables: Record<string, unknown> = {}) =>
+    fetcher<TriggerResponse>(`/api/tasks/${pathSegment(taskId)}/terraform/actions`, {
+      method: "POST",
+      body: JSON.stringify({ action, variables }),
+    }),
   getLogs: (workpiece: string, taskId: string, options?: { after?: number; limit?: number }) => {
     const params = new URLSearchParams();
     if (options?.after !== undefined) params.set("after", String(options.after));
@@ -317,6 +322,8 @@ export interface TriggerResponse {
   manifest: ManifestVariable[];
   missing_required: string[];
 }
+
+export type TerraformTaskAction = "plan" | "apply" | "destroy" | "output";
 
 export interface JobSummary {
   job_name: string;
