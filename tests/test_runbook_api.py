@@ -427,6 +427,139 @@ def test_rerun_terraform_file_package_can_override_runtime_command(monkeypatch: 
     assert seen_commands[-2:] == ["terraform apply -auto-approve", "terraform destroy -auto-approve"]
 
 
+def test_terraform_task_actions_create_rerun_tasks_with_mapped_commands(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/tf-actions")
+    create_wp = client.post("/api/workpieces/tf-actions", json={"description": "tf actions"})
+    assert create_wp.status_code in (201, 409)
+    create = client.post(
+        "/api/workpieces/tf-actions/runbooks/tf",
+        data={"type": "Terraform", "entry_file": "main.tf"},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+    assert create.status_code == 201
+
+    seen_commands: list[str] = []
+
+    def fake_dispatch_execution(*args, **kwargs):
+        variables = args[6]
+        command = str(variables.get("system.set_runtime", ""))
+        seen_commands.append(command)
+        return ExecResult(exit_code=0, error_summary="", command=command.split())
+
+    monkeypatch.setattr(main, "dispatch_execution", fake_dispatch_execution)
+    original = client.post(
+        "/api/workpieces/tf-actions/runbooks/tf/trigger",
+        json={"variables": {"name": "demo", "system.set_runtime": "terraform apply -auto-approve"}},
+    )
+    assert original.status_code == 201
+    original_task_id = original.json()["task"]["task_id"]
+
+    expected = {
+        "plan": "terraform plan -input=false",
+        "apply": "terraform apply -input=false -auto-approve",
+        "destroy": "terraform destroy -input=false -auto-approve",
+        "output": "terraform output",
+    }
+    for action, command in expected.items():
+        response = client.post(
+            f"/api/tasks/{original_task_id}/terraform/actions",
+            json={"action": action, "variables": {"name": f"{action}-demo"}},
+        )
+        assert response.status_code == 201
+        task = response.json()["task"]
+        assert task["variables"]["name"] == f"{action}-demo"
+        assert task["variables"]["system.set_runtime"] == command
+
+    assert seen_commands[-4:] == list(expected.values())
+
+
+def test_terraform_task_action_rejects_unknown_action():
+    response = client.post(
+        "/api/tasks/not-used/terraform/actions",
+        json={"action": "fmt", "variables": {}},
+    )
+    assert response.status_code == 422
+
+
+def test_terraform_task_action_rejects_non_terraform_task(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/tf-action-non-tf")
+    create_wp = client.post("/api/workpieces/tf-action-non-tf", json={"description": "not tf"})
+    assert create_wp.status_code in (201, 409)
+    create = client.post(
+        "/api/workpieces/tf-action-non-tf/runbooks/script",
+        json={"type": "Script", "content": "echo hello", "runtime": "bash"},
+    )
+    assert create.status_code == 201
+    monkeypatch.setattr(main, "dispatch_execution", lambda *args, **kwargs: ExecResult(exit_code=0, error_summary=""))
+    original = client.post("/api/workpieces/tf-action-non-tf/runbooks/script/trigger", json={"variables": {}})
+    assert original.status_code == 201
+
+    response = client.post(
+        f"/api/tasks/{original.json()['task']['task_id']}/terraform/actions",
+        json={"action": "plan", "variables": {}},
+    )
+
+    assert response.status_code == 400
+
+
+def test_terraform_task_action_runtime_override_is_controlled_by_action(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/tf-action-override")
+    create_wp = client.post("/api/workpieces/tf-action-override", json={"description": "tf override"})
+    assert create_wp.status_code in (201, 409)
+    create = client.post(
+        "/api/workpieces/tf-action-override/runbooks/tf",
+        data={"type": "Terraform", "entry_file": "main.tf"},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+    assert create.status_code == 201
+    monkeypatch.setattr(main, "dispatch_execution", lambda *args, **kwargs: ExecResult(exit_code=0, error_summary=""))
+    original = client.post(
+        "/api/workpieces/tf-action-override/runbooks/tf/trigger",
+        json={"variables": {"name": "demo", "system.set_runtime": "terraform apply -auto-approve"}},
+    )
+    assert original.status_code == 201
+
+    response = client.post(
+        f"/api/tasks/{original.json()['task']['task_id']}/terraform/actions",
+        json={
+            "action": "plan",
+            "variables": {"system.set_runtime": "terraform destroy -auto-approve"},
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["task"]["variables"]["system.set_runtime"] == "terraform plan -input=false"
+
+
+def test_terraform_task_action_invalid_variables_do_not_create_orphan_task(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/tf-action-invalid")
+    create_wp = client.post("/api/workpieces/tf-action-invalid", json={"description": "tf invalid"})
+    assert create_wp.status_code in (201, 409)
+    create = client.post(
+        "/api/workpieces/tf-action-invalid/runbooks/tf",
+        data={"type": "Terraform", "entry_file": "main.tf"},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+    assert create.status_code == 201
+    monkeypatch.setattr(main, "dispatch_execution", lambda *args, **kwargs: ExecResult(exit_code=0, error_summary=""))
+    original = client.post(
+        "/api/workpieces/tf-action-invalid/runbooks/tf/trigger",
+        json={"variables": {"name": "demo", "system.set_runtime": "terraform apply -auto-approve"}},
+    )
+    assert original.status_code == 201
+    before = client.get("/api/workpieces/tf-action-invalid/tasks").json()["items"]
+
+    response = client.post(
+        f"/api/tasks/{original.json()['task']['task_id']}/terraform/actions",
+        json={"action": "plan", "variables": {"oops": "bad"}},
+    )
+    after = client.get("/api/workpieces/tf-action-invalid/tasks").json()["items"]
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["unknown_variables"] == ["oops"]
+    assert len(after) == len(before)
+
+
 def test_rerun_terraform_file_package_inherits_previous_runtime_state(monkeypatch: pytest.MonkeyPatch):
     client.delete("/api/workpieces/rerun-terraform-state")
     create_wp = client.post("/api/workpieces/rerun-terraform-state", json={"description": "tf rerun state"})
@@ -471,6 +604,47 @@ def test_rerun_terraform_file_package_inherits_previous_runtime_state(monkeypatc
     assert client.get(f"/api/workpieces/rerun-terraform-state/tasks/{rerun.json()['task']['task_id']}").json()["status"] == "success"
     assert (runtime_dirs[1] / "terraform.tfstate").read_text(encoding="utf-8") == '{"resources":[]}'
     assert (runtime_dirs[1] / ".terraform" / "providers.lock").read_text(encoding="utf-8") == "provider cache"
+
+
+def test_terraform_task_action_inherits_previous_runtime_state(monkeypatch: pytest.MonkeyPatch):
+    client.delete("/api/workpieces/tf-action-state")
+    create_wp = client.post("/api/workpieces/tf-action-state", json={"description": "tf action state"})
+    assert create_wp.status_code in (201, 409)
+    create = client.post(
+        "/api/workpieces/tf-action-state/runbooks/tf",
+        data={"type": "Terraform", "entry_file": "main.tf"},
+        files=[("files", ("main.tf", b"resource \"null_resource\" \"{{ name }}\" {}\n", "text/plain"))],
+    )
+    assert create.status_code == 201
+
+    runtime_dirs: list[Path] = []
+
+    def fake_dispatch_execution(*args, **kwargs):
+        runtime_dir = Path(args[2])
+        variables = args[6]
+        runtime_dirs.append(runtime_dir)
+        if "apply" in str(variables.get("system.set_runtime", "")):
+            (runtime_dir / "terraform.tfstate").write_text('{"resources":[]}', encoding="utf-8")
+        else:
+            assert (runtime_dir / "terraform.tfstate").read_text(encoding="utf-8") == '{"resources":[]}'
+        return ExecResult(exit_code=0, error_summary="", command=str(variables.get("system.set_runtime", "")).split())
+
+    monkeypatch.setattr(main, "dispatch_execution", fake_dispatch_execution)
+    original = client.post(
+        "/api/workpieces/tf-action-state/runbooks/tf/trigger",
+        json={"variables": {"name": "demo", "system.set_runtime": "terraform apply -auto-approve"}},
+    )
+    assert original.status_code == 201
+
+    action = client.post(
+        f"/api/tasks/{original.json()['task']['task_id']}/terraform/actions",
+        json={"action": "destroy", "variables": {}},
+    )
+
+    assert action.status_code == 201
+    assert len(runtime_dirs) == 2
+    assert runtime_dirs[1] != runtime_dirs[0]
+    assert (runtime_dirs[1] / "terraform.tfstate").read_text(encoding="utf-8") == '{"resources":[]}'
 
 
 def test_rerun_terraform_file_package_inherits_subdir_entry_state(monkeypatch: pytest.MonkeyPatch):

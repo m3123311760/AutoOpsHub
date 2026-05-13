@@ -33,6 +33,7 @@ test("API clients encode dynamic path segments", async () => {
   await runbookApi.get("team #1?", "deploy/prod?");
   await taskApi.getLogs("team #1?", "task#1?");
   await taskApi.rerun("task#1?", { region: "west" });
+  await taskApi.terraformAction("task#1?", "destroy", { region: "west" });
   await taskApi.getLogs("team #1?", "task#1?", { after: 500, limit: 500 });
   await jobApi.update("team #1?", "nightly#1?", {
     cron: "0 0 * * *",
@@ -54,12 +55,26 @@ test("API clients encode dynamic path segments", async () => {
   );
   assert.equal(
     captured[4].url,
-    "http://localhost:8000/api/workpieces/team%20%231%3F/tasks/task%231%3F/logs?after=500&limit=500"
+    "http://localhost:8000/api/tasks/task%231%3F/terraform/actions"
   );
   assert.equal(
     captured[5].url,
+    "http://localhost:8000/api/workpieces/team%20%231%3F/tasks/task%231%3F/logs?after=500&limit=500"
+  );
+  assert.equal(
+    captured[6].url,
     "http://localhost:8000/api/workpieces/team%20%231%3F/jobs/nightly%231%3F"
   );
+});
+
+test("task API sends terraform action request body", async () => {
+  await taskApi.terraformAction("task-1", "plan", { region: "west" });
+
+  assert.equal(captured[0].options.method, "POST");
+  assert.deepEqual(JSON.parse(captured[0].options.body), {
+    action: "plan",
+    variables: { region: "west" },
+  });
 });
 
 test("fetcher only sends JSON content type when a body is present", async () => {
@@ -102,6 +117,15 @@ test("task log viewer polls incrementally from cached log sequence", () => {
   assert.match(source, /logCacheRef/);
   assert.match(source, /items\.reduce\(\(max, item\) => Math\.max\(max, item\.log_seq\), 0\)/);
   assert.doesNotMatch(source, /let after = 0;/);
+});
+
+test("task parameter dialog keeps actions reachable when many variables render", () => {
+  const source = readFileSync(new URL("../components/task-parameter-dialog.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /max-h-\[min\(92vh,760px\)\]/);
+  assert.match(source, /grid-rows-\[auto_minmax\(0,1fr\)_auto\]/);
+  assert.match(source, /overflow-y-auto/);
+  assert.match(source, /shrink-0/);
 });
 
 test("auth API clients cover login and API key management", async () => {

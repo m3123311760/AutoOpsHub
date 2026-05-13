@@ -91,45 +91,47 @@ export function TaskParameterDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent>
-        <DialogHeader>
+      <DialogContent className="grid max-h-[min(92vh,760px)] grid-rows-[auto_minmax(0,1fr)_auto]">
+        <DialogHeader className="pr-6">
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
-        <div className="grid gap-4 py-4">
-          {manifestItems.length > 0 ? (
-            inputItems.map((item) => (
-              <div key={item.name} className="grid gap-2">
-                <Label htmlFor={`param-${item.name}`}>
-                  {item.display_name || item.name}
-                  {item.required && <span className="text-destructive"> *</span>}
-                </Label>
-                <Input
-                  id={`param-${item.name}`}
-                  value={values[item.name] || ""}
-                  onChange={(e) => setValues((current) => ({ ...current, [item.name]: e.target.value }))}
-                  placeholder={item.default_value || item.name}
-                  required={item.required}
+        <div className="min-h-0 overflow-y-auto pr-1">
+          <div className="grid gap-4 py-4">
+            {manifestItems.length > 0 ? (
+              inputItems.map((item) => (
+                <div key={item.name} className="grid gap-2">
+                  <Label htmlFor={`param-${item.name}`}>
+                    {item.display_name || item.name}
+                    {item.required && <span className="text-destructive"> *</span>}
+                  </Label>
+                  <Input
+                    id={`param-${item.name}`}
+                    value={values[item.name] || ""}
+                    onChange={(e) => setValues((current) => ({ ...current, [item.name]: e.target.value }))}
+                    placeholder={item.default_value || item.name}
+                    required={item.required}
+                  />
+                </div>
+              ))
+            ) : (
+              <div className="grid gap-2">
+                <Label htmlFor="param-json">变量 (JSON)</Label>
+                <Textarea
+                  id="param-json"
+                  className="h-32 font-mono text-sm"
+                  value={jsonText}
+                  onChange={(e) => setJsonText(e.target.value)}
+                  placeholder='{"key": "value"}'
                 />
               </div>
-            ))
-          ) : (
-            <div className="grid gap-2">
-              <Label htmlFor="param-json">变量 (JSON)</Label>
-              <Textarea
-                id="param-json"
-                className="h-32 font-mono text-sm"
-                value={jsonText}
-                onChange={(e) => setJsonText(e.target.value)}
-                placeholder='{"key": "value"}'
-              />
-            </div>
-          )}
-          {(errorText || jsonError) && (
-            <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{errorText || jsonError}</div>
-          )}
+            )}
+            {(errorText || jsonError) && (
+              <div className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{errorText || jsonError}</div>
+            )}
+          </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="shrink-0 border-t border-border pt-4">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             取消
           </Button>
