@@ -32,7 +32,7 @@ import { EmptyState } from "@/components/empty-state";
 import { StatusBadge } from "@/components/status-badge";
 import { TaskLogPanel, TaskLogDialog } from "@/components/task-log-viewer";
 import { TaskParameterDialog } from "@/components/task-parameter-dialog";
-import { runbookApi, taskApi, type ManifestVariable, type TaskSummary, type Task } from "@/lib/api";
+import { runbookApi, taskApi, type ManifestVariable, type TaskSummary, type Task, type TerraformTaskAction } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 
 interface TasksContentProps {
@@ -45,6 +45,11 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     () => taskApi.list(workpiece),
     { refreshInterval: 5000 }
   );
+  const { data: runbooksData } = useSWR(
+    `runbooks-${workpiece}`,
+    () => runbookApi.list(workpiece),
+    { refreshInterval: 10000 }
+  );
 
   const [detailOpen, setDetailOpen] = useState(false);
   const [logOpen, setLogOpen] = useState(false);
@@ -54,9 +59,12 @@ export function TasksContent({ workpiece }: TasksContentProps) {
   const [rerunManifest, setRerunManifest] = useState<ManifestVariable[]>([]);
   const [rerunError, setRerunError] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  const [destroyTask, setDestroyTask] = useState<TaskSummary | Task | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const tasks = data?.items || [];
+  const runbookTypeByName = new Map((runbooksData?.items || []).map((runbook) => [runbook.name, runbook.type]));
+  const getTaskRunbookType = (task: TaskSummary | Task) => task.runbook_type || runbookTypeByName.get(task.runbook_name);
 
   // Sort by created_at desc
   const sortedTasks = [...tasks].sort(
@@ -119,6 +127,41 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const runTerraformAction = async (task: TaskSummary | Task, action: TerraformTaskAction) => {
+    if (getTaskRunbookType(task) !== "Terraform") return;
+    setIsSubmitting(true);
+    setLogTask(null);
+    setLogOpen(true);
+    try {
+      const response = await taskApi.terraformAction(task.task_id, action);
+      mutate(`tasks-${workpiece}`);
+      setLogTask(response.task);
+      if (selectedTask?.task_id === task.task_id) {
+        const updated = await taskApi.get(workpiece, task.task_id);
+        setSelectedTask(updated);
+      }
+    } catch (err) {
+      console.error(`Terraform ${action} 失败:`, err);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleTerraformAction = (task: TaskSummary | Task, action: TerraformTaskAction) => {
+    if (action === "destroy") {
+      setDestroyTask(task);
+      return;
+    }
+    runTerraformAction(task, action);
+  };
+
+  const confirmDestroy = async () => {
+    if (!destroyTask) return;
+    const task = destroyTask;
+    setDestroyTask(null);
+    await runTerraformAction(task, "destroy");
   };
 
   const handleConfirm = async () => {
@@ -234,7 +277,14 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1">
+                  <div className="flex flex-wrap items-center justify-end gap-1">
+                    {getTaskRunbookType(task) === "Terraform" && (
+                      <TerraformActionButtons
+                        task={task}
+                        isSubmitting={isSubmitting}
+                        onAction={handleTerraformAction}
+                      />
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -355,7 +405,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
               </TabsContent>
             </Tabs>
           )}
-          <DialogFooter>
+          <DialogFooter className="flex flex-wrap gap-2">
             {selectedTask?.status === "pending" || selectedTask?.status === "ready" ? (
               <>
                 <Button
@@ -380,10 +430,43 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                 </Button>
               </>
             ) : (
-              <Button variant="outline" onClick={() => setDetailOpen(false)}>
-                关闭
-              </Button>
+              <>
+                {selectedTask && getTaskRunbookType(selectedTask) === "Terraform" && (
+                  <TerraformActionButtons
+                    task={selectedTask}
+                    isSubmitting={isSubmitting}
+                    onAction={handleTerraformAction}
+                  />
+                )}
+                <Button variant="outline" onClick={() => setDetailOpen(false)}>
+                  关闭
+                </Button>
+              </>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(destroyTask)} onOpenChange={(open) => !open && setDestroyTask(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>确认 Destroy</DialogTitle>
+            <DialogDescription>
+              将基于任务 {destroyTask?.task_id} 的 Terraform state 创建 destroy 任务。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDestroyTask(null)}>
+              取消
+            </Button>
+            <Button onClick={confirmDestroy} disabled={isSubmitting}>
+              {isSubmitting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <AlertTriangle className="mr-2 h-4 w-4" />
+              )}
+              Destroy
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -414,4 +497,36 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
 function Label({ children }: { children: React.ReactNode }) {
   return <div className="text-sm font-medium text-muted-foreground">{children}</div>;
+}
+
+function TerraformActionButtons({
+  task,
+  isSubmitting,
+  onAction,
+}: {
+  task: TaskSummary | Task;
+  isSubmitting: boolean;
+  onAction: (task: TaskSummary | Task, action: TerraformTaskAction) => void;
+}) {
+  const disabled = isSubmitting || task.status === "running";
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      <Button variant="outline" size="sm" onClick={() => onAction(task, "plan")} disabled={disabled}>
+        <Eye className="mr-2 h-4 w-4" />
+        Plan
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => onAction(task, "apply")} disabled={disabled}>
+        <Play className="mr-2 h-4 w-4" />
+        Apply
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => onAction(task, "output")} disabled={disabled}>
+        <Terminal className="mr-2 h-4 w-4" />
+        Output
+      </Button>
+      <Button variant="outline" size="sm" onClick={() => onAction(task, "destroy")} disabled={disabled}>
+        <AlertTriangle className="mr-2 h-4 w-4" />
+        Destroy
+      </Button>
+    </div>
+  );
 }

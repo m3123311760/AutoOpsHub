@@ -84,13 +84,15 @@ def test_task_list_detail_update_confirm_cancel():
 
     list_resp = client.get("/api/workpieces/tasks-wp/tasks")
     assert list_resp.status_code == 200
-    assert any(x["task_id"] == task_id for x in list_resp.json()["items"])
+    listed_task = next(x for x in list_resp.json()["items"] if x["task_id"] == task_id)
+    assert listed_task["runbook_type"] == "Workflow"
 
     detail = client.get(f"/api/workpieces/tasks-wp/tasks/{task_id}")
     assert detail.status_code == 200
     detail_body = detail.json()
     assert "logs" not in detail_body
     assert detail_body["task_id"] == task_id
+    assert detail_body["runbook_type"] == "Workflow"
 
     update = client.put(
         f"/api/workpieces/tasks-wp/tasks/{task_id}/variables",

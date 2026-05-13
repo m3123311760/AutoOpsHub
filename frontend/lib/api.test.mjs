@@ -128,6 +128,19 @@ test("task parameter dialog keeps actions reachable when many variables render",
   assert.match(source, /shrink-0/);
 });
 
+test("tasks page exposes direct terraform action controls", () => {
+  const source = readFileSync(new URL("../components/tasks-content.tsx", import.meta.url), "utf8");
+
+  assert.match(source, /terraformAction/);
+  assert.match(source, /runbookTypeByName/);
+  assert.match(source, /getTaskRunbookType/);
+  assert.match(source, /Plan/);
+  assert.match(source, /Apply/);
+  assert.match(source, /Destroy/);
+  assert.match(source, /Output/);
+  assert.match(source, /确认 Destroy/);
+});
+
 test("auth API clients cover login and API key management", async () => {
   await authApi.getAuthStatus();
   await authApi.login("local", "admin", "secret");

@@ -299,6 +299,7 @@ export interface ManifestVariable {
 export interface TaskSummary {
   task_id: string;
   runbook_name: string;
+  runbook_type?: "Terraform" | "Ansible" | "Script" | "Workflow";
   source: "manual" | "job";
   status: "pending" | "ready" | "running" | "success" | "failed" | "canceled";
   created_at: string;

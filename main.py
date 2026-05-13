@@ -1544,10 +1544,12 @@ async def list_tasks(workpiece_name: str) -> dict[str, list[dict[str, Any]]]:
     _load_meta(workpiece_name)
     items = []
     for task in _list_tasks(workpiece_name):
+        runbook = _load_runbook(workpiece_name, task.runbook_name)
         items.append(
             {
                 "task_id": task.task_id,
                 "runbook_name": task.runbook_name,
+                "runbook_type": runbook.type.value,
                 "source": task.source.value,
                 "status": task.status.value,
                 "created_at": task.created_at,
@@ -1561,7 +1563,10 @@ async def list_tasks(workpiece_name: str) -> dict[str, list[dict[str, Any]]]:
 @app.get("/api/workpieces/{workpiece_name}/tasks/{task_id}")
 async def get_task(workpiece_name: str, task_id: str) -> dict[str, Any]:
     _load_meta(workpiece_name)
-    return _load_task(workpiece_name, task_id).model_dump()
+    task = _load_task(workpiece_name, task_id)
+    payload = task.model_dump()
+    payload["runbook_type"] = _load_runbook(workpiece_name, task.runbook_name).type.value
+    return payload
 
 
 @app.put("/api/workpieces/{workpiece_name}/tasks/{task_id}/variables")
