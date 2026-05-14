@@ -79,6 +79,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
   const loadTaskDetail = async (taskId: string) => {
     try {
+      setTaskActionError("");
       const task = await taskApi.get(workpiece, taskId);
       setSelectedTask(task);
       setDetailOpen(true);
@@ -347,7 +348,13 @@ export function TasksContent({ workpiece }: TasksContentProps) {
       </Card>
 
       {/* Task Detail Dialog */}
-      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+      <Dialog
+        open={detailOpen}
+        onOpenChange={(open) => {
+          setDetailOpen(open);
+          if (!open) setTaskActionError("");
+        }}
+      >
         <DialogContent className="grid max-h-[92vh] max-w-[min(1120px,calc(100vw-2rem))] grid-rows-[auto_minmax(0,1fr)_auto]">
           <DialogHeader>
             <DialogTitle>任务详情</DialogTitle>
@@ -383,13 +390,13 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                     <Label>运行手册</Label>
                     <div className="mt-1 flex items-center gap-2 font-medium">
                       {selectedTask.runbook_name}
-                      {selectedTask.runbook_missing ? (
+                      {selectedTask.runbook_missing || !getTaskRunbookType(selectedTask) ? (
                         <Badge variant="destructive" className="text-xs">
                           Runbook 已删除
                         </Badge>
                       ) : (
                         <Badge variant="outline" className="text-xs">
-                          {selectedTask.runbook_type}
+                          {getTaskRunbookType(selectedTask)}
                         </Badge>
                       )}
                     </div>
