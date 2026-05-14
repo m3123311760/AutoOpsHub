@@ -126,15 +126,19 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
   const handleRerun = async (variables: Record<string, unknown>) => {
     if (!rerunTask) return;
+    if (rerunTask.runbook_missing) {
+      setRerunError("关联的运行手册已删除，不能重新运行该历史任务");
+      return;
+    }
     setIsSubmitting(true);
     setRerunError("");
     setLogTask(null);
-    setLogOpen(true);
     try {
       const response = await taskApi.rerun(rerunTask.task_id, variables);
       setRerunOpen(false);
       mutate(`tasks-${workpiece}`);
       setLogTask(response.task);
+      setLogOpen(true);
     } catch (err) {
       console.error("重新运行失败:", err);
       setRerunError(err instanceof Error ? err.message : "重新运行失败");

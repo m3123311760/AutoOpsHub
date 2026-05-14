@@ -85,6 +85,7 @@ test("tasks page gates rerun and terraform actions by runbook resolution", () =>
   assert.match(apiSource, /runbook_missing: boolean/);
   assert.match(source, /const canCreateFollowUpTask = \(task: TaskSummary \| Task\) => !task\.runbook_missing/);
   assert.match(source, /setRerunTask\(null\)/);
+  assert.match(source, /if \(rerunTask\.runbook_missing\) \{/);
   assert.match(source, /setTaskActionError\(err instanceof Error \? err\.message/);
   assert.match(source, /if \(!open\) setTaskActionError\(""\)/);
   assert.match(source, /getTaskRunbookType\(task\) === "Terraform"/);
