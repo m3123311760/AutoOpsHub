@@ -394,13 +394,17 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                     <Label>运行手册</Label>
                     <div className="mt-1 flex items-center gap-2 font-medium">
                       {selectedTask.runbook_name}
-                      {selectedTask.runbook_missing || !getTaskRunbookType(selectedTask) ? (
+                      {selectedTask.runbook_missing ? (
                         <Badge variant="destructive" className="text-xs">
                           Runbook 已删除
                         </Badge>
-                      ) : (
+                      ) : getTaskRunbookType(selectedTask) ? (
                         <Badge variant="outline" className="text-xs">
                           {getTaskRunbookType(selectedTask)}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs">
+                          类型未知
                         </Badge>
                       )}
                     </div>
