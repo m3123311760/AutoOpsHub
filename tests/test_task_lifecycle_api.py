@@ -14,6 +14,12 @@ from main import app
 client = TestClient(app)
 
 
+def _find_task(items: list[dict], task_id: str) -> dict:
+    task = next((item for item in items if item["task_id"] == task_id), None)
+    assert task is not None, f"Task {task_id} not found in task list"
+    return task
+
+
 def setup_module() -> None:
     client.delete("/api/workpieces/tasks-wp")
     client.post("/api/workpieces/tasks-wp", json={"description": "task tests"})
@@ -84,8 +90,9 @@ def test_task_list_detail_update_confirm_cancel():
 
     list_resp = client.get("/api/workpieces/tasks-wp/tasks")
     assert list_resp.status_code == 200
-    listed_task = next(x for x in list_resp.json()["items"] if x["task_id"] == task_id)
-    assert listed_task["runbook_type"] == "Workflow"
+    task_summary = _find_task(list_resp.json()["items"], task_id)
+    assert task_summary["runbook_type"] == "Workflow"
+    assert task_summary["runbook_missing"] is False
 
     detail = client.get(f"/api/workpieces/tasks-wp/tasks/{task_id}")
     assert detail.status_code == 200
@@ -93,6 +100,7 @@ def test_task_list_detail_update_confirm_cancel():
     assert "logs" not in detail_body
     assert detail_body["task_id"] == task_id
     assert detail_body["runbook_type"] == "Workflow"
+    assert detail_body["runbook_missing"] is False
 
     update = client.put(
         f"/api/workpieces/tasks-wp/tasks/{task_id}/variables",
@@ -114,6 +122,86 @@ def test_task_list_detail_update_confirm_cancel():
 
     cancel_running = client.post(f"/api/workpieces/tasks-wp/tasks/{task_id}/cancel")
     assert cancel_running.status_code in (200, 409)
+
+
+def test_task_list_detail_tolerate_missing_runbook_and_reject_follow_up_actions():
+    client.delete("/api/workpieces/tasks-missing-runbook")
+    create_wp = client.post("/api/workpieces/tasks-missing-runbook", json={"description": "missing runbook"})
+    assert create_wp.status_code == 201
+    create_runbook = client.post(
+        "/api/workpieces/tasks-missing-runbook/runbooks/rb-old",
+        json={"type": "Workflow", "content": "steps: []\n"},
+    )
+    assert create_runbook.status_code == 201
+    created = client.post(
+        "/api/workpieces/tasks-missing-runbook/runbooks/rb-old/trigger",
+        json={"variables": {}},
+    )
+    assert created.status_code == 201
+    task_id = created.json()["task"]["task_id"]
+
+    deleted = client.delete("/api/workpieces/tasks-missing-runbook/runbooks/rb-old")
+    assert deleted.status_code == 204
+
+    list_resp = client.get("/api/workpieces/tasks-missing-runbook/tasks")
+    assert list_resp.status_code == 200
+    task_summary = _find_task(list_resp.json()["items"], task_id)
+    assert task_summary["runbook_name"] == "rb-old"
+    assert task_summary["runbook_type"] is None
+    assert task_summary["runbook_missing"] is True
+
+    detail = client.get(f"/api/workpieces/tasks-missing-runbook/tasks/{task_id}")
+    assert detail.status_code == 200
+    detail_body = detail.json()
+    assert detail_body["runbook_name"] == "rb-old"
+    assert detail_body["runbook_type"] is None
+    assert detail_body["runbook_missing"] is True
+
+    confirm = client.post(f"/api/workpieces/tasks-missing-runbook/tasks/{task_id}/confirm")
+    assert confirm.status_code == 409
+    assert "runbook not found" in confirm.json()["detail"]
+
+    rerun = client.post(f"/api/tasks/{task_id}/rerun", json={"variables": {}})
+    assert rerun.status_code == 409
+    assert "runbook not found" in rerun.json()["detail"]
+
+    terraform_action = client.post(
+        f"/api/tasks/{task_id}/terraform/actions",
+        json={"action": "plan", "variables": {}},
+    )
+    assert terraform_action.status_code == 409
+    assert "runbook not found" in terraform_action.json()["detail"]
+
+
+def test_task_list_detail_tolerate_invalid_runbook_metadata():
+    client.delete("/api/workpieces/tasks-invalid-runbook")
+    create_wp = client.post("/api/workpieces/tasks-invalid-runbook", json={"description": "invalid runbook"})
+    assert create_wp.status_code == 201
+    create_runbook = client.post(
+        "/api/workpieces/tasks-invalid-runbook/runbooks/rb-bad",
+        json={"type": "Workflow", "content": "steps: []\n"},
+    )
+    assert create_runbook.status_code == 201
+    created = client.post(
+        "/api/workpieces/tasks-invalid-runbook/runbooks/rb-bad/trigger",
+        json={"variables": {}},
+    )
+    assert created.status_code == 201
+    task_id = created.json()["task"]["task_id"]
+
+    main._runbook_path("tasks-invalid-runbook", "rb-bad").write_text("{", encoding="utf-8")
+
+    list_resp = client.get("/api/workpieces/tasks-invalid-runbook/tasks")
+    assert list_resp.status_code == 200
+    task_summary = _find_task(list_resp.json()["items"], task_id)
+    assert task_summary["runbook_type"] is None
+    assert task_summary["runbook_missing"] is True
+
+    detail = client.get(f"/api/workpieces/tasks-invalid-runbook/tasks/{task_id}")
+    assert detail.status_code == 200
+    detail_body = detail.json()
+    assert detail_body["runbook_type"] is None
+    assert detail_body["runbook_missing"] is True
 
 
 def test_confirm_ready_task_is_idempotent_and_queues_execution_once(monkeypatch):

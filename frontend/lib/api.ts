@@ -246,9 +246,11 @@ export interface HandlingStrategy {
   delay_seconds: number;
 }
 
+export type RunbookType = "Terraform" | "Ansible" | "Script" | "Workflow";
+
 export interface RunbookSummary {
   name: string;
-  type: "Terraform" | "Ansible" | "Script" | "Workflow";
+  type: RunbookType;
   description: string;
   content_mode?: "inline" | "files";
   entry_file?: string | null;
@@ -272,7 +274,7 @@ export interface RunbookFilesSummary {
 }
 
 export interface RunbookUpsertRequest {
-  type: "Terraform" | "Ansible" | "Script" | "Workflow";
+  type: RunbookType;
   description?: string;
   content: string;
   runtime?: string;
@@ -299,7 +301,8 @@ export interface ManifestVariable {
 export interface TaskSummary {
   task_id: string;
   runbook_name: string;
-  runbook_type?: "Terraform" | "Ansible" | "Script" | "Workflow";
+  runbook_type: RunbookType | null;
+  runbook_missing: boolean;
   source: "manual" | "job";
   status: "pending" | "ready" | "running" | "success" | "failed" | "canceled";
   created_at: string;

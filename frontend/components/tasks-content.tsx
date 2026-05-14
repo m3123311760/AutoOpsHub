@@ -60,19 +60,26 @@ export function TasksContent({ workpiece }: TasksContentProps) {
   const [rerunError, setRerunError] = useState("");
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [destroyTask, setDestroyTask] = useState<TaskSummary | Task | null>(null);
+  const [taskActionError, setTaskActionError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const tasks = data?.items || [];
   const runbookTypeByName = new Map((runbooksData?.items || []).map((runbook) => [runbook.name, runbook.type]));
-  const getTaskRunbookType = (task: TaskSummary | Task) => task.runbook_type || runbookTypeByName.get(task.runbook_name);
+  const getTaskRunbookType = (task: TaskSummary | Task) =>
+    task.runbook_missing ? undefined : task.runbook_type || runbookTypeByName.get(task.runbook_name);
 
   // Sort by created_at desc
   const sortedTasks = [...tasks].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
   );
 
+  const canCreateFollowUpTask = (task: TaskSummary | Task) => !task.runbook_missing;
+  const isTerraformTask = (task: TaskSummary | Task) =>
+    canCreateFollowUpTask(task) && getTaskRunbookType(task) === "Terraform";
+
   const loadTaskDetail = async (taskId: string) => {
     try {
+      setTaskActionError("");
       const task = await taskApi.get(workpiece, taskId);
       setSelectedTask(task);
       setDetailOpen(true);
@@ -95,8 +102,15 @@ export function TasksContent({ workpiece }: TasksContentProps) {
     setIsSubmitting(true);
     setRerunError("");
     setRerunManifest([]);
+    setRerunTask(null);
     try {
       const task = await taskApi.get(workpiece, taskId);
+      if (task.runbook_missing) {
+        setRerunTask(task);
+        setRerunError("关联的运行手册已删除，不能重新运行该历史任务");
+        setRerunOpen(true);
+        return;
+      }
       const manifest = await runbookApi.getManifest(workpiece, task.runbook_name);
       setRerunTask(task);
       setRerunManifest(manifest.items);
@@ -112,15 +126,19 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
   const handleRerun = async (variables: Record<string, unknown>) => {
     if (!rerunTask) return;
+    if (rerunTask.runbook_missing) {
+      setRerunError("关联的运行手册已删除，不能重新运行该历史任务");
+      return;
+    }
     setIsSubmitting(true);
     setRerunError("");
     setLogTask(null);
-    setLogOpen(true);
     try {
       const response = await taskApi.rerun(rerunTask.task_id, variables);
       setRerunOpen(false);
       mutate(`tasks-${workpiece}`);
       setLogTask(response.task);
+      setLogOpen(true);
     } catch (err) {
       console.error("重新运行失败:", err);
       setRerunError(err instanceof Error ? err.message : "重新运行失败");
@@ -130,26 +148,29 @@ export function TasksContent({ workpiece }: TasksContentProps) {
   };
 
   const runTerraformAction = async (task: TaskSummary | Task, action: TerraformTaskAction) => {
-    if (getTaskRunbookType(task) !== "Terraform") return;
+    if (!isTerraformTask(task)) return;
     setIsSubmitting(true);
     setLogTask(null);
-    setLogOpen(true);
+    setTaskActionError("");
     try {
       const response = await taskApi.terraformAction(task.task_id, action);
       mutate(`tasks-${workpiece}`);
       setLogTask(response.task);
+      setLogOpen(true);
       if (selectedTask?.task_id === task.task_id) {
         const updated = await taskApi.get(workpiece, task.task_id);
         setSelectedTask(updated);
       }
     } catch (err) {
       console.error(`Terraform ${action} 失败:`, err);
+      setTaskActionError(err instanceof Error ? err.message : `Terraform ${action} 失败`);
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleTerraformAction = (task: TaskSummary | Task, action: TerraformTaskAction) => {
+    if (!isTerraformTask(task)) return;
     if (action === "destroy") {
       setDestroyTask(task);
       return;
@@ -224,6 +245,12 @@ export function TasksContent({ workpiece }: TasksContentProps) {
 
   return (
     <div className="space-y-6">
+      {taskActionError && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          {taskActionError}
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-6 gap-4">
         {Object.entries(statusCounts).map(([status, count]) => (
@@ -274,25 +301,32 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                       </div>
                       <div className="mt-1 text-sm text-muted-foreground">
                         {task.runbook_name} · {formatDate(task.created_at)}
+                        {task.runbook_missing && (
+                          <Badge variant="destructive" className="ml-2 text-xs">
+                            Runbook 已删除
+                          </Badge>
+                        )}
                       </div>
                     </div>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-1">
-                    {getTaskRunbookType(task) === "Terraform" && (
+                    {isTerraformTask(task) && (
                       <TerraformActionButtons
                         task={task}
                         isSubmitting={isSubmitting}
                         onAction={handleTerraformAction}
                       />
                     )}
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => openRerunDialog(task.task_id)}
-                    >
-                      <RotateCcw className="mr-2 h-4 w-4" />
-                      重跑
-                    </Button>
+                    {canCreateFollowUpTask(task) && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => openRerunDialog(task.task_id)}
+                      >
+                        <RotateCcw className="mr-2 h-4 w-4" />
+                        重跑
+                      </Button>
+                    )}
                     <Button
                       variant="ghost"
                       size="sm"
@@ -318,7 +352,13 @@ export function TasksContent({ workpiece }: TasksContentProps) {
       </Card>
 
       {/* Task Detail Dialog */}
-      <Dialog open={detailOpen} onOpenChange={setDetailOpen}>
+      <Dialog
+        open={detailOpen}
+        onOpenChange={(open) => {
+          setDetailOpen(open);
+          if (!open) setTaskActionError("");
+        }}
+      >
         <DialogContent className="grid max-h-[92vh] max-w-[min(1120px,calc(100vw-2rem))] grid-rows-[auto_minmax(0,1fr)_auto]">
           <DialogHeader>
             <DialogTitle>任务详情</DialogTitle>
@@ -352,7 +392,22 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                   </div>
                   <div>
                     <Label>运行手册</Label>
-                    <div className="mt-1 font-medium">{selectedTask.runbook_name}</div>
+                    <div className="mt-1 flex items-center gap-2 font-medium">
+                      {selectedTask.runbook_name}
+                      {selectedTask.runbook_missing ? (
+                        <Badge variant="destructive" className="text-xs">
+                          Runbook 已删除
+                        </Badge>
+                      ) : getTaskRunbookType(selectedTask) ? (
+                        <Badge variant="outline" className="text-xs">
+                          {getTaskRunbookType(selectedTask)}
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline" className="text-xs">
+                          类型未知
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                   <div>
                     <Label>退出码</Label>
@@ -405,6 +460,11 @@ export function TasksContent({ workpiece }: TasksContentProps) {
               </TabsContent>
             </Tabs>
           )}
+          {taskActionError && (
+            <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+              {taskActionError}
+            </div>
+          )}
           <DialogFooter className="flex flex-wrap gap-2">
             {selectedTask?.status === "pending" || selectedTask?.status === "ready" ? (
               <>
@@ -420,7 +480,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
                   )}
                   取消任务
                 </Button>
-                <Button onClick={handleConfirm} disabled={isSubmitting}>
+                <Button onClick={handleConfirm} disabled={isSubmitting || selectedTask.runbook_missing}>
                   {isSubmitting ? (
                     <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                   ) : (
@@ -431,7 +491,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
               </>
             ) : (
               <>
-                {selectedTask && getTaskRunbookType(selectedTask) === "Terraform" && (
+                {selectedTask && isTerraformTask(selectedTask) && (
                   <TerraformActionButtons
                     task={selectedTask}
                     isSubmitting={isSubmitting}
@@ -456,7 +516,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDestroyTask(null)}>
+            <Button variant="outline" onClick={() => setDestroyTask(null)} disabled={isSubmitting}>
               取消
             </Button>
             <Button onClick={confirmDestroy} disabled={isSubmitting}>
@@ -465,7 +525,7 @@ export function TasksContent({ workpiece }: TasksContentProps) {
               ) : (
                 <AlertTriangle className="mr-2 h-4 w-4" />
               )}
-              Destroy
+              确认 Destroy
             </Button>
           </DialogFooter>
         </DialogContent>

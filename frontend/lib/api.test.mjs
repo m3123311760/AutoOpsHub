@@ -77,6 +77,30 @@ test("task API sends terraform action request body", async () => {
   });
 });
 
+test("tasks page gates rerun and terraform actions by runbook resolution", () => {
+  const source = readFileSync(new URL("../components/tasks-content.tsx", import.meta.url), "utf8");
+  const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+
+  assert.match(apiSource, /runbook_type: RunbookType \| null/);
+  assert.match(apiSource, /runbook_missing: boolean/);
+  assert.match(source, /const canCreateFollowUpTask = \(task: TaskSummary \| Task\) => !task\.runbook_missing/);
+  assert.match(source, /setRerunTask\(null\)/);
+  assert.match(source, /if \(rerunTask\.runbook_missing\) \{/);
+  assert.match(source, /setTaskActionError\(err instanceof Error \? err\.message/);
+  assert.match(source, /if \(!open\) setTaskActionError\(""\)/);
+  assert.match(source, /getTaskRunbookType\(task\) === "Terraform"/);
+  assert.match(source, /selectedTask\.runbook_missing \? \(/);
+  assert.match(source, /getTaskRunbookType\(selectedTask\) \? \(/);
+  assert.match(source, /类型未知/);
+  assert.match(source, /selectedTask\?\.status === "pending" \|\| selectedTask\?\.status === "ready" \? \(/);
+  assert.match(source, /Runbook 已删除/);
+  assert.match(source, /确认 Destroy/);
+  assert.match(source, /onAction\(task, "plan"\)/);
+  assert.match(source, /onAction\(task, "apply"\)/);
+  assert.match(source, /onAction\(task, "output"\)/);
+  assert.match(source, /onAction\(task, "destroy"\)/);
+});
+
 test("fetcher only sends JSON content type when a body is present", async () => {
   await workpieceApi.list();
   await workpieceApi.create("team", "demo");
